@@ -1,2 +1,7 @@
 node_modules/
 dist/
+.cache/
+demo-dist/
+.next/
+*.tsbuildinfo
+next-env.d.ts

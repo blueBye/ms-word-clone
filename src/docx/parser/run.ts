@@ -1,40 +1,68 @@
-import type { RunProperties, TextRun, ComplexScriptProperties } from '../../model/document.js';
-import { childElements, childWord, halfPoints, isWord, onOff, wordAttribute } from './xml.js';
+import type { Element } from '@xmldom/xmldom';
+import type { Inline, RunProperties } from '../../model/document.js';
+import { childWord, contentElements, isWord, wordAttribute } from './xml.js';
+import { parseRunPropertyElement } from './properties.js';
+import { parseDrawing } from './drawing.js';
+import type { BlockParser, ParseContext } from './context.js';
 
 export function parseRunProperties(run: Element): RunProperties {
-  const props: RunProperties = {};
-  const rPr = childWord(run, 'rPr');
-  if (!rPr) return props;
-  const fonts = childWord(rPr, 'rFonts');
-  if (fonts) {
-    // Latin/high-ANSI collapsed intentionally; genuine script-specific font kept separately.
-    props.fontFamily = wordAttribute(fonts, 'hAnsi') ?? wordAttribute(fonts, 'ascii');
-  }
-  props.bold = onOff(childWord(rPr, 'b'));
-  props.italic = onOff(childWord(rPr, 'i'));
-  props.fontSizePt = halfPoints(childWord(rPr, 'sz'));
-  const direction = onOff(childWord(rPr, 'rtl'));
-  if (direction !== undefined) props.direction = direction ? 'rtl' : 'ltr';
-  const cs: ComplexScriptProperties = {};
-  if (fonts) cs.fontFamily = wordAttribute(fonts, 'cs');
-  cs.fontSizePt = halfPoints(childWord(rPr, 'szCs'));
-  cs.bold = onOff(childWord(rPr, 'bCs'));
-  cs.italic = onOff(childWord(rPr, 'iCs'));
-  if (Object.values(cs).some(v => v !== undefined)) props.complexScript = cs;
-  return props;
+  return parseRunPropertyElement(childWord(run, 'rPr'));
 }
 
 /** Flatten supported text-bearing run children, preserving run text order and whitespace. */
-export function parseRun(run: Element): TextRun | undefined {
-  const strings: string[] = [];
-  for (const child of childElements(run)) {
-    if (isWord(child, 't')) strings.push(child.textContent || '');
-    else if (isWord(child, 'tab')) strings.push('\t');
-    else if (isWord(child, 'br') || isWord(child, 'cr')) strings.push('\n');
-    else if (isWord(child, 'noBreakHyphen')) strings.push('\u2011');
-    else if (isWord(child, 'softHyphen')) strings.push('\u00AD');
-    // Deleted/field instruction text and unsupported drawing elements are not visual text.
+export function parseRun(
+  run: Element,
+  base: RunProperties = {},
+  context?: ParseContext,
+  parseBlocks?: BlockParser,
+): Inline[] {
+  const direct = parseRunPropertyElement(childWord(run, 'rPr'), context?.theme);
+  const properties = context ? context.styles.run(base, direct) : direct;
+  const result: Inline[] = [];
+  let text = '';
+  let hasText = false;
+  const flush = () => {
+    if (hasText)
+      result.push({
+        type: 'text',
+        text,
+        properties,
+        ...(context ? { directProperties: direct } : {}),
+      });
+    text = '';
+    hasText = false;
+  };
+  for (const child of contentElements(run)) {
+    if (isWord(child, 't')) {
+      text += child.textContent || '';
+      hasText = true;
+    } else if (isWord(child, 'tab')) {
+      text += '\t';
+      hasText = true;
+    } else if (
+      isWord(child, 'br') &&
+      ['page', 'column'].includes(wordAttribute(child, 'type') ?? '')
+    ) {
+      flush();
+      result.push({
+        type: 'break',
+        kind: wordAttribute(child, 'type') as 'page' | 'column',
+        properties,
+      });
+    } else if (isWord(child, 'br') || isWord(child, 'cr')) {
+      text += '\n';
+      hasText = true;
+    } else if (isWord(child, 'noBreakHyphen')) {
+      text += '\u2011';
+      hasText = true;
+    } else if (isWord(child, 'softHyphen')) {
+      text += '\u00AD';
+      hasText = true;
+    } else if (isWord(child, 'drawing') || isWord(child, 'pict')) {
+      flush();
+      result.push(...parseDrawing(child, context, parseBlocks));
+    }
   }
-  if (!strings.length) return undefined;
-  return { type: 'text', text: strings.join(''), properties: parseRunProperties(run) };
+  flush();
+  return result;
 }

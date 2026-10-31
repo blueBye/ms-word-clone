@@ -1,1 +1,2 @@
-export type { DocumentIR, TextDirection, ParagraphAlignment, ParagraphProperties, Paragraph, ComplexScriptProperties, RunProperties, TextRun } from './document.js';
+export type * from './document.js';
+export { getParagraphs, getTextRuns } from './traversal.js';
