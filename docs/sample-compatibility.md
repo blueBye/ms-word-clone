@@ -24,6 +24,8 @@ The screenshot of page one's end also exposed a table-continuation issue: the re
 
 ## Structural checks
 
+The report also ends with an undecorated empty body paragraph after its final table. If that paragraph cannot fit, the preview keeps it in the source model without generating a separate header-only sheet. It still renders when it fits. Explicit page breaks, list markers, drawings, fields, visible shading/borders and interior blank paragraphs remain unaffected. The regression recreates three full table pages followed by the empty end paragraph and verifies that the layout stays at three sheets.
+
 | File | Paragraphs retained | Tables | List paragraphs | Body text retained |
 | --- | ---: | ---: | ---: | --- |
 | PhD_Report_1403_V1(1).docx | 120 | 12 | 26 | All |

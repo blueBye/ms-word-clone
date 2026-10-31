@@ -277,6 +277,94 @@ describe('header/footer fonts and page variants', () => {
 });
 
 describe('measured page construction', () => {
+  const endTable = (): Table => ({
+    type: 'table',
+    properties: {},
+    columnsPt: [100],
+    rows: [
+      {
+        cells: [
+          {
+            column: 0,
+            columnSpan: 1,
+            rowSpan: 1,
+            blocks: [paragraph('Table content')],
+          },
+        ],
+      },
+    ],
+  });
+
+  it('does not create a fourth sheet for the empty paragraph after the final table', () => {
+    const tail = { ...paragraph(''), children: [] };
+    const blocks = [endTable(), endTable(), endTable(), tail];
+    const before = JSON.stringify(blocks);
+    const pages = paginateBlocks(
+      blocks,
+      [
+        { heightPt: 100 },
+        { heightPt: 100 },
+        { heightPt: 100 },
+        { heightPt: 15 },
+      ],
+      () => 100,
+    );
+    expect(pages).toHaveLength(3);
+    expect(pages.map((page) => page.blocks)).toEqual(
+      blocks.slice(0, 3).map((table) => [table]),
+    );
+    expect(pages.every((page) => !page.overflow)).toBe(true);
+    expect(JSON.stringify(blocks)).toBe(before);
+  });
+
+  it('retains the final empty paragraph when it fits on the table page', () => {
+    const tail = paragraph(' \t');
+    const blocks = [endTable(), tail];
+    const pages = paginateBlocks(
+      blocks,
+      [{ heightPt: 80 }, { heightPt: 15 }],
+      () => 100,
+    );
+    expect(pages).toHaveLength(1);
+    expect(pages[0].blocks).toEqual(blocks);
+  });
+
+  it('keeps visible decoration on whitespace after a table', () => {
+    const tail = paragraph(' ');
+    tail.children = [
+      { type: 'text', text: ' ', properties: { backgroundColor: '#ff0' } },
+    ];
+    const pages = paginateBlocks(
+      [endTable(), tail],
+      [{ heightPt: 100 }, { heightPt: 15 }],
+      () => 100,
+    );
+    expect(pages).toHaveLength(2);
+    expect(pages[1].blocks).toEqual([tail]);
+  });
+
+  it.each([
+    paragraph('', { pageBreakBefore: true }),
+    paragraph('Actual text'),
+    paragraph('', { list: { marker: '1.', suffix: 'tab', properties: {} } }),
+    paragraph('', { backgroundColor: '#ddd' }),
+    paragraph('', {
+      borders: { bottom: { style: 'single', widthPt: 1, color: '#000' } },
+    }),
+  ])(
+    'preserves explicit page breaks and visible paragraph content after the final table (%#)',
+    (tail) => {
+      const blocks = [endTable(), tail];
+      const pages = paginateBlocks(
+        blocks,
+        [{ heightPt: 100 }, { heightPt: 15 }],
+        () => 100,
+      );
+      expect(pages).toHaveLength(2);
+      expect(pages[1].blocks).toEqual([tail]);
+    },
+  );
+
   it('preserves the three blank paragraphs after a bullet and carries the row border to the page bottom', () => {
     const blank = () => ({ ...paragraph(''), children: [] });
     const cell = {

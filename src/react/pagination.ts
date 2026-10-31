@@ -101,6 +101,32 @@ export interface PageSlice {
   blocks: Block[];
   overflow: boolean;
 }
+
+function isEmptyTableEndParagraph(
+  block: Block,
+  previous: Block | undefined,
+): boolean {
+  if (block.type !== 'paragraph' || previous?.type !== 'table') return false;
+  const p = block.properties;
+  return (
+    !p.pageBreakBefore &&
+    !p.list &&
+    !p.backgroundColor &&
+    !Object.values(p.borders ?? {}).some(
+      (border) => !['nil', 'none'].includes(border.style),
+    ) &&
+    block.children.every(
+      (child) =>
+        child.type === 'text' &&
+        !child.field &&
+        !child.text.trim() &&
+        !child.properties.backgroundColor &&
+        !child.properties.strike &&
+        (!child.properties.underline || child.properties.underline === 'none'),
+    )
+  );
+}
+
 export function pageVariant(
   document: DocumentIR,
   number: number,
@@ -173,6 +199,15 @@ export function paginateBlocks(
     const block = blocks[index];
     const measurement = measurements[index] ?? { heightPt: 0 };
     const height = Math.max(0, measurement.heightPt);
+    // A final empty paragraph after a table must not create a header-only sheet.
+    // Retain it when it fits; never change the source IR or strip interior spacing.
+    if (
+      index === blocks.length - 1 &&
+      page.blocks.length &&
+      used + height > capacity() &&
+      isEmptyTableEndParagraph(block, blocks[index - 1])
+    )
+      continue;
     if (block.type === 'paragraph' && block.properties.pageBreakBefore)
       finish();
     if (block.type === 'paragraph' && block.properties.keepNext) {
