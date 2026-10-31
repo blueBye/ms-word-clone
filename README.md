@@ -28,6 +28,8 @@ The application lives in `apps/web/`; the engine remains in `src/`. The app impo
 
 ## Review and roadmap
 
+The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. Start with its first implementation batch for the next UI work.
+
 The [engine review](docs/engine-review.md) covers the parser, document IR, RTL/LTR typography and remaining compatibility risks. The [feature matrix](docs/compatibility.md) records current support, and the [development plan](docs/development-plan.md) defines staged engine work followed by the Next.js editor.
 
 The build now uses the xmldom 0.9 callback API and DOM types. Synthetic/component and sample-integration checks cover the current subset; real Word interoperability, browser typography and export remain future validation work.

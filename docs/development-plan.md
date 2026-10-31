@@ -1,5 +1,7 @@
 # DOCX engine and Next.js development plan
 
+UI planning update (2026-11-01): the [installed Word inventory](word-ui-inventory.md) and [UI implementation plan](word-ui-implementation-plan.md) now define File/Home/Insert/Layout. The next application batch is a Word-like shell around the approved preview, followed by an editing/preservation prototype. The engine gates below remain required before enabling edited DOCX export; this planning update does not complete them.
+
 Date: 2026-10-31. This plan follows the [source review](engine-review.md) and [feature matrix](compatibility.md). The current change completes M0 only. M1–M6 describe future work, with gates that prevent unsupported content from being silently rewritten.
 
 Implementation update: the local Next.js shell now exists in `apps/web/`, with DOCX upload, engine rendering, a bilingual sample and regular-face font loading. Run `pnpm dev` from the repository root. This advances the application shell portion of M5; the common-feature engine, editing and export gates below remain outstanding.
@@ -46,7 +48,7 @@ Dependency direction: `model` has no imports from DOCX, React, Next.js or browse
 
 The core may use xmldom internally; it must not require a browser `document`, Node filesystem, application router or global CSS. Keep React behind its existing subpath; make its peer optional when validating headless consumers, or split the renderer into a package when it actually has a separate lifecycle.
 
-When the app exists, move the unchanged engine directory to `packages/docx-ir-engine` and add `apps/web` using pnpm workspaces. Keep package exports and tests intact. Add a consumer build/import smoke test at that move. No Turborepo, dependency injection container or plugin system is needed for this boundary.
+The app now exists in `apps/web` and consumes the root engine package through pnpm workspaces. Keep that working boundary for the UI work; there is no need to relocate the engine now. If it later moves to `packages/docx-ir-engine`, keep package exports/tests intact and add a consumer build/import smoke test at that move. No Turborepo, dependency injection container or plugin system is needed for this boundary.
 
 ## Model decisions before adding features
 
@@ -187,6 +189,6 @@ Use a small .NET/Open XML SDK validation utility when writer work begins; it is 
 
 Track import time, peak memory and interactive pauses for a fixed 1/20/100-page corpus on recorded hardware. Establish measured budgets before optimization; do not invent a throughput claim now. Record skipped manual/Word checks visibly in release evidence.
 
-## Immediate next implementation batch
+## Next engine implementation batch
 
-Start with OPC-01, OPC-02, IR-01 and PRES-01: content-type/encoding validation, related-part resolution, a diagnostic/session API and unchanged-file preservation. Then add a fixture containing style-based RTL and four font slots to drive M2. This creates the smallest safe foundation for the next engine feature without tying it to a Next.js application prematurely.
+For the next engine batch, start with OPC-01, OPC-02, IR-01 and PRES-01: content-type/encoding validation, related-part resolution, a diagnostic/session API and unchanged-file preservation. Then add a fixture containing style-based RTL and four font slots to drive M2. These remain prerequisites for safe edited exports. The next application batch is the preview ribbon shell described in the [UI plan](word-ui-implementation-plan.md); it can proceed before those editing/export gates are complete.
