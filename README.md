@@ -83,7 +83,7 @@ The current `DocumentIR` has `schemaVersion: 2`. `blocks` is a paragraph/table u
 
 ## Known boundaries — important
 
-- Browser-measured page layout is not Word pagination. Pages split at paragraph and table-row boundaries; vertical merges stay together. Oversize paragraphs/rows are not split into line fragments. Full section transitions and floating-object wrapping remain incomplete. Basic PAGE/NUMPAGES fields update per sheet; arbitrary fields do not.
+- Browser-measured page layout is not Word pagination. Pages split between paragraphs, table rows, and paragraphs within splittable table cells; vertical merges stay together. Cell padding and paragraph spacing count toward page capacity. Rows marked `cantSplit` or exact-height remain intact; paragraphs are not split into line fragments. Full section transitions and floating-object wrapping remain incomplete. Basic PAGE/NUMPAGES fields update per sheet; arbitrary fields do not.
 - Drawing support covers the sample documents' common image, rectangle, ellipse and textbox forms. Arbitrary geometry/effects, VML-only graphics, standalone SVG, charts and OLE are unsupported or approximate.
 - Conditional table style regions, sophisticated tab alignment, all numbering formats and full Word font-selection behavior remain incomplete. Fonts must be available in the browser; embedded DOCX font decoding is not implemented.
 - Comments/review editing, footnotes/endnotes, encrypted containers, UTF-16 XML decoding and DOCX export remain outside the supported subset. Unknown XML is not retained for round-trip saving.

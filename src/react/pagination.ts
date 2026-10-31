@@ -10,6 +10,90 @@ import type {
 export interface BlockMeasurement {
   heightPt: number;
   rowHeightsPt?: number[];
+  cells?: CellMeasurement[][];
+}
+export interface CellMeasurement {
+  /** Block bounds include paragraph margins, in the cell's coordinate space. */
+  blocks: { startPt: number; endPt: number }[];
+  insetPt: number;
+}
+
+function cellHeight(measurement: CellMeasurement): number {
+  const { blocks, insetPt } = measurement;
+  return (
+    insetPt +
+    (blocks.length ? blocks[blocks.length - 1].endPt - blocks[0].startPt : 0)
+  );
+}
+
+/** Split copies at cell block boundaries; the imported table stays unchanged. */
+function splitRow(
+  row: TableRow,
+  measurements: CellMeasurement[] | undefined,
+  available: number,
+) {
+  if (
+    row.cantSplit ||
+    row.heightRule === 'exact' ||
+    !measurements ||
+    measurements.length !== row.cells.length ||
+    row.cells.some(
+      (cell, index) =>
+        cell.rowSpan !== 1 ||
+        cell.continuation ||
+        measurements[index].blocks.length !== cell.blocks.length,
+    )
+  )
+    return null;
+
+  const counts = row.cells.map((cell, index) => {
+    const measurement = measurements[index];
+    let count = 0;
+    for (let end = 1; end <= cell.blocks.length; end++) {
+      if (
+        measurement.insetPt +
+          measurement.blocks[end - 1].endPt -
+          measurement.blocks[0].startPt >
+        available
+      )
+        break;
+      const block = cell.blocks[end - 1];
+      if (
+        end === cell.blocks.length ||
+        block.type !== 'paragraph' ||
+        !block.properties.keepNext
+      )
+        count = end;
+    }
+    return count;
+  });
+  if (
+    !counts.some(Boolean) ||
+    counts.every((count, index) => count === row.cells[index].blocks.length)
+  )
+    return null;
+
+  const part = (remaining: boolean) => {
+    const cells = row.cells.map((cell, index) => ({
+      ...cell,
+      blocks: remaining
+        ? cell.blocks.slice(counts[index])
+        : cell.blocks.slice(0, counts[index]),
+      verticalAlign: 'top' as const,
+    }));
+    const measured = measurements.map((cell, index) => ({
+      ...cell,
+      blocks: remaining
+        ? cell.blocks.slice(counts[index])
+        : cell.blocks.slice(0, counts[index]),
+    }));
+    return {
+      row: { ...row, heightPt: undefined, heightRule: undefined, cells },
+      measurements: measured,
+      heightPt: Math.max(0, ...measured.map(cellHeight)),
+    };
+  };
+  return { first: part(false), rest: part(true) };
 }
 export interface PageSlice {
   blocks: Block[];
@@ -155,23 +239,41 @@ export function paginateBlocks(
         for (const cell of block.rows[scan].cells)
           end = Math.min(block.rows.length, Math.max(end, scan + cell.rowSpan));
       }
-      const groupHeight = rowHeights.slice(row, end).reduce((a, b) => a + b, 0);
-      const repeatHeight =
-        !rows.length && continued && row >= headerCount ? headerHeight : 0;
-      if (
-        (page.blocks.length || rows.length) &&
-        used + fragmentHeight + repeatHeight + groupHeight > capacity()
-      ) {
+      let group = block.rows.slice(row, end);
+      let groupHeight = rowHeights.slice(row, end).reduce((a, b) => a + b, 0);
+      let cells = measurement.cells?.[row];
+      for (;;) {
+        const repeatHeight =
+          !rows.length && continued && row >= headerCount ? headerHeight : 0;
+        const available = capacity() - used - fragmentHeight - repeatHeight;
+        const split =
+          groupHeight > available && group.length === 1
+            ? splitRow(group[0], cells, available)
+            : null;
+        if (
+          groupHeight > available &&
+          !split &&
+          (page.blocks.length || rows.length)
+        ) {
+          commit();
+          finish();
+          continued = true;
+          continue;
+        }
+        if (!rows.length && continued && row >= headerCount) {
+          rows.push(...block.rows.slice(0, headerCount));
+          fragmentHeight += headerHeight;
+        }
+        rows.push(...(split ? [split.first.row] : group));
+        fragmentHeight += split ? split.first.heightPt : groupHeight;
+        if (!split) break;
         commit();
         finish();
         continued = true;
+        group = [split.rest.row];
+        groupHeight = split.rest.heightPt;
+        cells = split.rest.measurements;
       }
-      if (!rows.length && continued && row >= headerCount) {
-        rows.push(...block.rows.slice(0, headerCount));
-        fragmentHeight += headerHeight;
-      }
-      rows.push(...block.rows.slice(row, end));
-      fragmentHeight += groupHeight;
       row = end;
     }
     commit();

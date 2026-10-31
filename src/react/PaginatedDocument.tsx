@@ -63,15 +63,53 @@ export function PaginatedDocument({
         );
       };
       const measurements: BlockMeasurement[] = Array.from(body.children).map(
-        (element) => ({
-          heightPt: outerHeight(element),
-          rowHeightsPt:
+        (element) => {
+          const rows =
             element.tagName === 'TABLE'
-              ? Array.from(element.querySelectorAll(':scope > tbody > tr')).map(
-                  (row) => row.getBoundingClientRect().height * 0.75,
+              ? Array.from(
+                  element.querySelectorAll<HTMLTableRowElement>(
+                    ':scope > tbody > tr',
+                  ),
                 )
-              : undefined,
-        }),
+              : undefined;
+          return {
+            heightPt: outerHeight(element),
+            rowHeightsPt: rows?.map(
+              (row) => row.getBoundingClientRect().height * 0.75,
+            ),
+            cells: rows?.map((row) =>
+              Array.from(row.cells).map((cell) => {
+                const style = getComputedStyle(cell);
+                const cellTop = cell.getBoundingClientRect().top;
+                return {
+                  insetPt:
+                    ((parseFloat(style.paddingTop) || 0) +
+                      (parseFloat(style.paddingBottom) || 0) +
+                      ((parseFloat(style.borderTopWidth) || 0) +
+                        (parseFloat(style.borderBottomWidth) || 0)) /
+                        2) *
+                    0.75,
+                  blocks: Array.from(cell.children).map((child) => {
+                    const rect = child.getBoundingClientRect();
+                    const childStyle = getComputedStyle(child);
+                    return {
+                      startPt:
+                        (rect.top -
+                          cellTop -
+                          (parseFloat(childStyle.marginTop) || 0)) *
+                        0.75,
+                      endPt:
+                        (rect.bottom -
+                          cellTop +
+                          (parseFloat(childStyle.marginBottom) || 0)) *
+                        0.75,
+                    };
+                  }),
+                };
+              }),
+            ),
+          };
+        },
       );
       const insets = {} as Insets;
       for (const variant of ['first', 'default', 'even'] as const) {

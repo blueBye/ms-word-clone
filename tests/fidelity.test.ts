@@ -14,6 +14,7 @@ import {
   paginateBlocks,
   pageVariant,
   splitPageBreaks,
+  type CellMeasurement,
 } from '../src/react/pagination.js';
 import { localizeDigits } from '../src/model/numerals.js';
 import { docx, documentXml, W, OFFICE_REL, REL } from './helpers/docx.js';
@@ -189,6 +190,261 @@ describe('header/footer fonts and page variants', () => {
 });
 
 describe('measured page construction', () => {
+  const cellMeasurement = (heights: number[], insetPt = 0): CellMeasurement => {
+    let offset = 0;
+    return {
+      insetPt,
+      blocks: heights.map((height) => {
+        const startPt = offset;
+        offset += height;
+        return { startPt, endPt: offset };
+      }),
+    };
+  };
+
+  it('starts a long report cell below the title and continues it across pages', () => {
+    // Same structure as the report: a title followed by one 47-paragraph row.
+    const table: Table = {
+      type: 'table',
+      properties: { direction: 'rtl' },
+      columnsPt: [200],
+      rows: [
+        {
+          cells: [
+            {
+              column: 0,
+              columnSpan: 1,
+              rowSpan: 1,
+              blocks: [paragraph('Title')],
+            },
+          ],
+        },
+        {
+          heightPt: 155.45,
+          cells: [
+            {
+              column: 0,
+              columnSpan: 1,
+              rowSpan: 1,
+              blocks: Array.from({ length: 47 }, (_, i) =>
+                paragraph(`Report ${i + 1}`, { direction: 'rtl' }),
+              ),
+            },
+          ],
+        },
+      ],
+    };
+    const before = JSON.stringify(table);
+    const pages = paginateBlocks(
+      [paragraph('Before'), table],
+      [
+        { heightPt: 20 },
+        {
+          heightPt: 1199,
+          rowHeightsPt: [20, 1179],
+          cells: [
+            [cellMeasurement([20])],
+            [cellMeasurement(Array(47).fill(25), 4)],
+          ],
+        },
+      ],
+      () => 200,
+    );
+    expect(getTextRuns(pages[0].blocks).map((run) => run.text)).toEqual([
+      'Before',
+      'Title',
+      'Report 1',
+      'Report 2',
+      'Report 3',
+      'Report 4',
+      'Report 5',
+      'Report 6',
+    ]);
+    expect(pages.every((page) => !page.overflow)).toBe(true);
+    expect(
+      getTextRuns(pages.flatMap((page) => page.blocks)).map((run) => run.text),
+    ).toEqual(getTextRuns([paragraph('Before'), table]).map((run) => run.text));
+    expect(pages).toHaveLength(7);
+    expect(JSON.stringify(table)).toBe(before);
+  });
+
+  it('splits multiple cells independently while preserving columns, spans and list markers', () => {
+    const table: Table = {
+      type: 'table',
+      properties: {},
+      columnsPt: [100, 100, 100],
+      rows: [
+        {
+          cells: [
+            {
+              column: 0,
+              columnSpan: 2,
+              rowSpan: 1,
+              backgroundColor: '#eee',
+              blocks: [paragraph('Label')],
+            },
+            {
+              column: 2,
+              columnSpan: 1,
+              rowSpan: 1,
+              blocks: ['A', 'B', 'C'].map((value, i) =>
+                paragraph(value, {
+                  list: { marker: `${i + 1}.`, suffix: 'tab', properties: {} },
+                }),
+              ),
+            },
+          ],
+        },
+      ],
+    };
+    const pages = paginateBlocks(
+      [table],
+      [
+        {
+          heightPt: 120,
+          rowHeightsPt: [120],
+          cells: [[cellMeasurement([10]), cellMeasurement([40, 40, 40])]],
+        },
+      ],
+      () => 90,
+    );
+    const fragments = pages.map((page) => page.blocks[0] as Table);
+    expect(
+      fragments.map((part) =>
+        part.rows[0].cells.map((cell) =>
+          getTextRuns(cell.blocks).map((run) => run.text),
+        ),
+      ),
+    ).toEqual([
+      [['Label'], ['A', 'B']],
+      [[], ['C']],
+    ]);
+    expect(fragments[1].rows[0].cells[0]).toMatchObject({
+      column: 0,
+      columnSpan: 2,
+      backgroundColor: '#eee',
+    });
+    expect(
+      getParagraphs(fragments[1].rows[0].cells[1].blocks)[0].properties.list
+        ?.marker,
+    ).toBe('3.');
+  });
+
+  it.each([true, false])(
+    'respects cantSplit=%s when cell measurements are available',
+    (cantSplit) => {
+      const table: Table = {
+        type: 'table',
+        properties: {},
+        columnsPt: [100],
+        rows: [
+          {
+            cantSplit,
+            cells: [
+              {
+                column: 0,
+                columnSpan: 1,
+                rowSpan: 1,
+                blocks: [paragraph('A'), paragraph('B')],
+              },
+            ],
+          },
+        ],
+      };
+      const pages = paginateBlocks(
+        [paragraph('Before'), table],
+        [
+          { heightPt: 60 },
+          {
+            heightPt: 80,
+            rowHeightsPt: [80],
+            cells: [[cellMeasurement([40, 40])]],
+          },
+        ],
+        () => 100,
+      );
+      expect(
+        pages.map((page) => getTextRuns(page.blocks).map((run) => run.text)),
+      ).toEqual(
+        cantSplit ? [['Before'], ['A', 'B']] : [['Before', 'A'], ['B']],
+      );
+    },
+  );
+
+  it('moves a keep-with-next cell heading with its following paragraph', () => {
+    const table: Table = {
+      type: 'table',
+      properties: {},
+      columnsPt: [100],
+      rows: [
+        {
+          cells: [
+            {
+              column: 0,
+              columnSpan: 1,
+              rowSpan: 1,
+              blocks: [
+                paragraph('Heading', { keepNext: true }),
+                paragraph('Body'),
+                paragraph('After'),
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const pages = paginateBlocks(
+      [paragraph('Before'), table],
+      [
+        { heightPt: 80 },
+        {
+          heightPt: 80,
+          rowHeightsPt: [80],
+          cells: [[cellMeasurement([20, 40, 20])]],
+        },
+      ],
+      () => 100,
+    );
+    expect(
+      pages.map((page) => getTextRuns(page.blocks).map((run) => run.text)),
+    ).toEqual([['Before'], ['Heading', 'Body', 'After']]);
+  });
+
+  it('retains a cell with an indivisible oversize paragraph without losing following content', () => {
+    const table: Table = {
+      type: 'table',
+      properties: {},
+      columnsPt: [100],
+      rows: [
+        {
+          cells: [
+            {
+              column: 0,
+              columnSpan: 1,
+              rowSpan: 1,
+              blocks: [paragraph('Huge'), paragraph('After')],
+            },
+          ],
+        },
+      ],
+    };
+    const pages = paginateBlocks(
+      [table],
+      [
+        {
+          heightPt: 170,
+          rowHeightsPt: [170],
+          cells: [[cellMeasurement([150, 20])]],
+        },
+      ],
+      () => 100,
+    );
+    expect(
+      getTextRuns(pages.flatMap((page) => page.blocks)).map((run) => run.text),
+    ).toEqual(['Huge', 'After']);
+    expect(pages[0].overflow).toBe(true);
+  });
+
   it('creates separate sheets at the content height and respects keep-with-next', () => {
     const blocks = [
       paragraph('First'),

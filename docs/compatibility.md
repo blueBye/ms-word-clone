@@ -40,7 +40,7 @@ Baseline: 2026-10-31, updated after the four-document compatibility pass. “Par
 | Unknown part / unknown XML preservation | No | No placeholder | M1 |
 | Editing / history / IME | No | No | M5 |
 | DOCX writer / Word reopen validation | No | N/A | M2 first slice, M3/M4 expand |
-| Exact Word pagination | No | Browser-measured sheets; paragraph/row boundaries, oversize blocks retained | M4 measured profile, ongoing work |
+| Exact Word pagination | No | Browser-measured sheets; paragraph/row/cell-block boundaries, oversize indivisible blocks retained | M4 measured profile, ongoing work |
 
 ## Proposed first release profile
 
