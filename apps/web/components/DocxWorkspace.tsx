@@ -43,9 +43,18 @@ export function DocxWorkspace() {
         try {
           // Unlike FontFaceSet.check(), local() loading fails if a requested face is absent.
           // The probe is not registered, so it does not replace native bold/italic faces.
+          // local() uses face names, which may differ from the family: e.g.
+          // family Pofak has full name "Pofak Regular" / PostScript "Pofak-Regular".
+          const localNames = [
+            font.family,
+            `${font.family} Regular`,
+            `${font.family.replace(/\s+/g, '')}-Regular`,
+          ];
           await new FontFace(
             '__docx_font_probe__',
-            `local(${JSON.stringify(font.family)})`,
+            localNames
+              .map((name) => `local(${JSON.stringify(name)})`)
+              .join(', '),
           ).load();
           return null;
         } catch {
@@ -266,6 +275,13 @@ export function DocxWorkspace() {
                   ? `Font names in this document: ${families.join(', ')}.`
                   : 'Enter the exact font family name used in your document.'}{' '}
                 Load a regular font face for this browser session.
+              </p>
+              <p>
+                On Windows, the Fonts view can hide files from upload pickers.
+                User-installed fonts are usually in{' '}
+                <code>%LOCALAPPDATA%\Microsoft\Windows\Fonts</code>. Paste the
+                font file’s full path into the picker’s File name box. Use the
+                family name, such as Pofak, without Word’s “(Body)” label.
               </p>
             </div>
             <label>

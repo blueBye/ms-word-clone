@@ -151,6 +151,45 @@ describe('sample-derived table coverage', () => {
 });
 
 describe('styles, fonts and typography', () => {
+  it('uses natural single-line font height inside shaded cells while retaining inherited padding', async () => {
+    const runProps =
+      '<w:rFonts w:ascii="Example Body" w:hAnsi="Example Body" w:cs="Example Body"/><w:sz w:val="24"/><w:szCs w:val="24"/><w:rtl/>';
+    const document = await load(
+      table(
+        `<w:tr>${cell(
+          p('First line', '', runProps) + p('Second line', '', runProps),
+          '<w:shd w:fill="FFFFCC"/>',
+        )}</w:tr>`,
+        '<w:tblStyle w:val="Grid"/><w:bidiVisual/>',
+      ),
+      {
+        'styles.xml': styles(
+          '<w:docDefaults><w:pPrDefault><w:pPr><w:bidi/><w:spacing w:line="240" w:lineRule="auto" w:after="0"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="table" w:styleId="Grid"><w:tblPr><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>',
+        ),
+      },
+    );
+    const before = JSON.stringify(document);
+    const output = html(document);
+    expect(output).toContain('background-color:#FFFFCC');
+    expect(output).toContain('padding:0pt 5.4pt 0pt 5.4pt');
+    expect(output.match(/<p\b[^>]*line-height:normal/g)).toHaveLength(2);
+    expect(output).not.toContain('line-height:1;');
+    expect(output).toContain('font-family:&quot;Example Body&quot;');
+    expect(output).toContain('font-size:12pt');
+    expect(JSON.stringify(document)).toBe(before);
+  });
+
+  it('preserves exact line spacing as an explicit point value', async () => {
+    const document = await load(
+      p('Text', '<w:spacing w:line="240" w:lineRule="exact"/>'),
+    );
+    expect(html(document)).toContain('line-height:12pt');
+    expect(getParagraphs(document.blocks)[0].properties.lineSpacing).toEqual({
+      rule: 'exact',
+      value: 12,
+    });
+  });
+
   it('resolves document defaults, basedOn and explicit character/direct overrides', async () => {
     const document = await load(
       p(

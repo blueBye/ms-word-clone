@@ -432,7 +432,12 @@ function renderParagraph(
         : `${p.firstLinePt}pt`,
     lineHeight: line
       ? line.rule === 'auto'
-        ? line.value
+        ? // Word's single spacing uses the font's natural line height, not 1em.
+          // ponytail: other multiples still use CSS em ratios; measure normal font
+          // leading before extending this to exact Word multiple-line spacing.
+          line.value === 1
+          ? 'normal'
+          : line.value
         : line.rule === 'atLeast'
           ? `max(${line.value}pt, 1.2em)`
           : `${line.value}pt`
