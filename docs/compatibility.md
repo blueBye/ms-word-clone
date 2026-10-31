@@ -32,7 +32,7 @@ Baseline: 2026-10-31, updated after the four-document compatibility pass. “Par
 | Tables, widths, merges, RTL order | Basic nested tables and merges | Flow layout; floating/conditional cases partial | M3 |
 | Inline images, dimensions, alt text | Embedded rasters/crops | Basic supported | M3 |
 | Sections, page size, margins | Final-section page settings | Flow preview with source margins | M4 |
-| Headers/footers/page numbers | Story variants and cached text | Once per flow, no repeated pagination/recalculation | M4 |
+| Headers/footers/page numbers | Story variants and basic PAGE/NUMPAGES fields | Repeated on measured sheets; browser layout can differ from Word | M4 |
 | Footnotes/endnotes | No | No | M4 |
 | Fields and TOC | Result text may survive, field structure lost | Partial cached text | M1 preserve; M4 display; M6 updates |
 | Revisions/comments | Partial inserted text; metadata lost | No review UI | M1 preserve/diagnose; M6 editing |
@@ -40,7 +40,7 @@ Baseline: 2026-10-31, updated after the four-document compatibility pass. “Par
 | Unknown part / unknown XML preservation | No | No placeholder | M1 |
 | Editing / history / IME | No | No | M5 |
 | DOCX writer / Word reopen validation | No | N/A | M2 first slice, M3/M4 expand |
-| Exact Word pagination | No | No | M4 measured profile, ongoing work |
+| Exact Word pagination | No | Browser-measured sheets; paragraph/row boundaries, oversize blocks retained | M4 measured profile, ongoing work |
 
 ## Proposed first release profile
 

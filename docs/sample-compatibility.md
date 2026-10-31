@@ -30,7 +30,9 @@ The IR is now version 2 with typed table and inline nodes. Public traversal help
 
 ## Remaining limitations
 
-- This is a flowing preview. Exact Word pagination, repeated first/even/default stories, updated page numbers and full multi-section layout are not implemented.
+Follow-up corrections: image-wide alpha (including the résumé's `alphaModFix amt="20000"`) is retained and rendered; color-specific alpha is not mistaken for whole-image transparency. Legacy RTL indents now use the paragraph's leading edge, markers inherit paragraph-mark fonts, and Persian RTL list labels use Persian digits without rewriting body text. Run spans no longer create separate bidi embeddings. The viewer now measures separate page sheets and repeats header/footer variants; basic page-number fields update on each sheet. Missing fonts such as the distinct header face B Compset are identified by location and can be loaded through the font control.
+
+- The app uses browser-measured page sheets with first/even/default stories and basic PAGE/NUMPAGES results. Exact Word pagination and full multi-section layout remain incomplete. Paragraphs and table rows taller than a page are kept intact and marked as oversize.
 - Positioned drawings retain offsets, extents and stacking intent, but Word's wrapping/coordinate system is only approximated. The floating table in the quarterly report is placed in document order. The viewer displays compatibility notes for these cases.
 - Arbitrary DrawingML geometry/effects and VML-only content are incomplete. The résumé SVG drawing uses its supplied raster fallback; the engine does not inject SVG into the page.
 - B Nazanin, Pofak, Bahnschrift and other requested fonts must be installed or loaded using the app's font control. The supplied packages reference fonts but do not provide an embedded-font loading solution.

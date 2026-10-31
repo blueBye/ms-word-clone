@@ -11,7 +11,7 @@ pnpm dev
 
 Open **http://127.0.0.1:3000** and click **Open DOCX**. An English/Persian/Arabic sample opens automatically so there is something to see immediately. **Custom fonts** lets you load a regular font face using the exact family name from your document. Documents are parsed locally in your browser.
 
-The preview supports tables, merged cells, lists, inherited styles, images, page backgrounds and document margins. Floating drawings and tables use approximate browser layout; headers/footers appear once rather than repeating across automatically paginated pages. Compatibility notes explain known approximations for each document.
+The preview supports tables, merged cells, lists, inherited styles, image opacity, page backgrounds and document margins. The Next.js viewer measures content into separate sheets, repeats first/default/even headers and footers, and reflows after fonts load. Floating drawings and Word's exact pagination remain approximate; indivisible content taller than a page is retained with an oversize notice.
 
 `pnpm dev` builds the engine and starts Next.js. Keep the terminal running while using the app; press Ctrl+C to stop it. Node.js 20.9 or newer is required.
 
@@ -64,6 +64,8 @@ export default function DocxPreview() {
 
 If a document uses `B Zar`, `B Nazanin`, or another proprietary font, **load the font in the host application** using `@font-face` or Next.js font loading. The engine does not embed or supply fonts.
 
+The Next.js app uses `PaginatedDocument` from the React entry point for measured page sheets. `DocumentRenderer` remains a single-sheet/flow primitive. `getRequiredFonts(document)` includes header/footer textboxes and list markers; the app probes local font availability and identifies missing fonts by location. Loading a font increments `fontRevision` so pages are measured again.
+
 ## Supported subset
 
 - OPC ZIP reading, root and source-relative part relationships, Transitional/Strict namespaces.
@@ -81,7 +83,7 @@ The current `DocumentIR` has `schemaVersion: 2`. `blocks` is a paragraph/table u
 
 ## Known boundaries — important
 
-- Exact Word pagination, floating-object wrapping, all section transitions, repeating headers/footers and field recalculation remain incomplete. Page/column breaks are retained, but screen preview flows rather than recreating Word pages.
+- Browser-measured page layout is not Word pagination. Pages split at paragraph and table-row boundaries; vertical merges stay together. Oversize paragraphs/rows are not split into line fragments. Full section transitions and floating-object wrapping remain incomplete. Basic PAGE/NUMPAGES fields update per sheet; arbitrary fields do not.
 - Drawing support covers the sample documents' common image, rectangle, ellipse and textbox forms. Arbitrary geometry/effects, VML-only graphics, standalone SVG, charts and OLE are unsupported or approximate.
 - Conditional table style regions, sophisticated tab alignment, all numbering formats and full Word font-selection behavior remain incomplete. Fonts must be available in the browser; embedded DOCX font decoding is not implemented.
 - Comments/review editing, footnotes/endnotes, encrypted containers, UTF-16 XML decoding and DOCX export remain outside the supported subset. Unknown XML is not retained for round-trip saving.

@@ -1,13 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getParagraphs,
   getTextRuns,
   importDocx,
   type DocumentIR,
 } from '@local/docx-ir-engine';
-import { DocumentRenderer } from '@local/docx-ir-engine/react';
+import {
+  PaginatedDocument,
+  getRequiredFonts,
+  type FontRequirement,
+} from '@local/docx-ir-engine/react';
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
@@ -18,15 +22,53 @@ export function DocxWorkspace() {
   const [error, setError] = useState('');
   const [fontFamily, setFontFamily] = useState('');
   const [fontStatus, setFontStatus] = useState('');
+  const [fontRevision, setFontRevision] = useState(0);
+  const [missingFonts, setMissingFonts] = useState<FontRequirement[]>([]);
+  const [pageCount, setPageCount] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const fontPanel = useRef<HTMLDetailsElement>(null);
   const request = useRef(0);
   const fonts = useRef<FontFace[]>([]);
+  const loadedFamilies = useRef(new Set<string>());
+  const requiredFonts = useMemo(
+    () => (document ? getRequiredFonts(document) : []),
+    [document],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      requiredFonts.map(async (font) => {
+        if (loadedFamilies.current.has(font.family.toLowerCase())) return null;
+        try {
+          // Unlike FontFaceSet.check(), local() loading fails if a requested face is absent.
+          // The probe is not registered, so it does not replace native bold/italic faces.
+          await new FontFace(
+            '__docx_font_probe__',
+            `local(${JSON.stringify(font.family)})`,
+          ).load();
+          return null;
+        } catch {
+          return font;
+        }
+      }),
+    ).then((result) => {
+      if (!cancelled)
+        setMissingFonts(
+          result.filter((font): font is FontRequirement => font !== null),
+        );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [requiredFonts, fontRevision]);
 
   async function open(read: () => Promise<ArrayBuffer>, name: string) {
     const current = ++request.current;
     setBusy(true);
     setError('');
     setDocument(null);
+    setPageCount(0);
     setFilename(name);
     try {
       const result = await importDocx(await read(), {
@@ -77,6 +119,8 @@ export function DocxWorkspace() {
       ).load();
       window.document.fonts.add(font);
       fonts.current.push(font);
+      loadedFamilies.current.add(fontFamily.trim().toLowerCase());
+      setFontRevision((value) => value + 1);
       setFontStatus(`“${font.family}” is ready to use in this document.`);
     } catch {
       setFontStatus(
@@ -165,9 +209,28 @@ export function DocxWorkspace() {
         </div>
         <div className="support-note">
           Preview includes tables, lists, images, inherited formatting and
-          RTL/LTR text. Word pagination and floating layouts may differ. Editing
-          and saving DOCX are not available yet.
+          RTL/LTR text in separate page sheets. Browser pagination and floating
+          layouts may differ from Word. Editing and saving DOCX are not
+          available yet.
         </div>
+        {missingFonts.length ? (
+          <div className="font-warning" role="status">
+            Some source fonts are missing. Load the matching files for an
+            accurate preview:{' '}
+            {missingFonts.map((font) => (
+              <button
+                type="button"
+                key={font.family}
+                onClick={() => {
+                  setFontFamily(font.family);
+                  if (fontPanel.current) fontPanel.current.open = true;
+                }}
+              >
+                {font.family} ({font.locations.join(', ')})
+              </button>
+            ))}
+          </div>
+        ) : null}
         {document?.diagnostics?.length ? (
           <details className="compatibility-notes">
             <summary>
@@ -181,8 +244,20 @@ export function DocxWorkspace() {
           </details>
         ) : null}
 
-        <details className="font-settings">
-          <summary>Custom fonts</summary>
+        <details ref={fontPanel} className="font-settings">
+          <summary>
+            Custom fonts
+            {missingFonts.length ? ` · ${missingFonts.length} missing` : ''}
+          </summary>
+          {missingFonts.length ? (
+            <p className="missing-fonts" role="status">
+              These fonts are not available in this browser:{' '}
+              {missingFonts
+                .map((font) => `${font.family} (${font.locations.join(', ')})`)
+                .join('; ')}
+              . Load their font files below to replace the fallback fonts.
+            </p>
+          ) : null}
           <div className="font-controls">
             <div className="font-help">
               <strong>Use your document’s font</strong>
@@ -199,7 +274,13 @@ export function DocxWorkspace() {
                 value={fontFamily}
                 onChange={(event) => setFontFamily(event.target.value)}
                 placeholder="e.g. B Nazanin"
+                list="document-fonts"
               />
+              <datalist id="document-fonts">
+                {families.map((family) => (
+                  <option key={family} value={family} />
+                ))}
+              </datalist>
             </label>
             <label>
               Font file
@@ -247,7 +328,11 @@ export function DocxWorkspace() {
               </div>
             ) : document ? (
               document.blocks.length ? (
-                <DocumentRenderer document={document} pageLayout />
+                <PaginatedDocument
+                  document={document}
+                  fontRevision={fontRevision}
+                  onPageCountChange={setPageCount}
+                />
               ) : (
                 <div className="empty-state">
                   <h2>No supported text found</h2>
@@ -267,7 +352,7 @@ export function DocxWorkspace() {
           <footer className="document-footer">
             <span>
               {document
-                ? `${paragraphs.length} paragraphs · ${runs.length} text runs`
+                ? `${pageCount ? `${pageCount} pages · ` : ''}${paragraphs.length} paragraphs · ${runs.length} text runs`
                 : 'DOCX workspace'}
             </span>
             <a href="/sample.docx" download>

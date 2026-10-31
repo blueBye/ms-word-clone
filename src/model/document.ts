@@ -5,6 +5,7 @@ export interface DocumentIR {
   blocks: Block[];
   page?: PageLayout;
   backgroundColor?: string;
+  language?: string;
   headers?: StoryVariants;
   footers?: StoryVariants;
   diagnostics?: DocumentDiagnostic[];
@@ -24,6 +25,8 @@ export interface PageLayout {
     Record<'top' | 'right' | 'bottom' | 'left' | 'header' | 'footer', number>
   >;
   differentFirstPage?: boolean;
+  evenAndOddHeaders?: boolean;
+  pageNumberStart?: number;
 }
 export type Block = Paragraph | Table;
 export type Inline = TextRun | BreakInline | DrawingInline;
@@ -59,7 +62,13 @@ export interface ParagraphProperties {
   backgroundColor?: string;
   borders?: Borders;
   numbering?: { id?: string; level?: number };
-  list?: { marker: string; suffix: string; properties: RunProperties };
+  list?: {
+    marker: string;
+    suffix: string;
+    properties: RunProperties;
+    locale?: string;
+    format?: string;
+  };
 }
 export interface Paragraph {
   type: 'paragraph';
@@ -104,6 +113,7 @@ export interface TextRun {
   properties: RunProperties;
   directProperties?: RunProperties;
   href?: string;
+  field?: 'page' | 'pages';
 }
 export interface BreakInline {
   type: 'break';
@@ -122,6 +132,7 @@ export interface DrawingInline {
   alt: string;
   image?: {
     dataUrl: string;
+    opacity?: number;
     crop?: Partial<Record<'left' | 'top' | 'right' | 'bottom', number>>;
   };
   shape?: {

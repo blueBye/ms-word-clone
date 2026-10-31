@@ -1,5 +1,8 @@
 import React from 'react';
 import type { CSSProperties, ReactNode } from 'react';
+import { getParagraphs, getTextRuns } from '../model/traversal.js';
+import { localizeDigits } from '../model/numerals.js';
+import { pageVariant } from './pagination.js';
 import type {
   Block,
   Border,
@@ -127,6 +130,55 @@ function borderStyle(borders: Borders | undefined): CSSProperties {
 }
 interface RenderContext {
   page?: PageLayout;
+  pageNumber?: number;
+  pageCount?: number;
+  language?: string;
+  paragraphDirection?: 'ltr' | 'rtl';
+}
+
+export interface FontRequirement {
+  family: string;
+  locations: ('body' | 'header' | 'footer')[];
+}
+/** Include fonts used in textbox content and all header/footer variants. */
+export function getRequiredFonts(document: DocumentIR): FontRequirement[] {
+  const found = new Map<string, FontRequirement>();
+  function add(
+    properties: RunProperties,
+    script: Script,
+    location: 'body' | 'header' | 'footer',
+  ) {
+    const family =
+      script === 'cs'
+        ? (properties.complexScript?.fontFamily ?? properties.fontFamily)
+        : (properties.fontSlots?.[script] ?? properties.fontFamily);
+    if (!family) return;
+    const item = found.get(family) ?? { family, locations: [] };
+    if (!item.locations.includes(location)) item.locations.push(location);
+    found.set(family, item);
+  }
+  function scan(blocks: Block[], location: 'body' | 'header' | 'footer') {
+    for (const run of getTextRuns(blocks))
+      for (const part of segments(run))
+        add(run.properties, part.script, location);
+    for (const paragraph of getParagraphs(blocks)) {
+      const script = paragraph.properties.direction === 'rtl' ? 'cs' : 'ascii';
+      if (!paragraph.children.length && paragraph.markProperties)
+        add(paragraph.markProperties, script, location);
+      if (paragraph.properties.list)
+        add(
+          paragraph.properties.list.properties,
+          script === 'cs' ? 'cs' : 'hAnsi',
+          location,
+        );
+    }
+  }
+  scan(document.blocks, 'body');
+  for (const blocks of Object.values(document.headers ?? {}))
+    scan(blocks ?? [], 'header');
+  for (const blocks of Object.values(document.footers ?? {}))
+    scan(blocks ?? [], 'footer');
+  return [...found.values()];
 }
 
 function Drawing({
@@ -191,6 +243,7 @@ function Drawing({
             height: `${100 / height}%`,
             left: `${(-(crop?.left ?? 0) / width) * 100}%`,
             top: `${(-(crop?.top ?? 0) / height) * 100}%`,
+            opacity: d.image.opacity,
           }}
         />
       )}
@@ -238,26 +291,46 @@ function renderInline(
         aria-label={`${inline.kind} break`}
       />
     );
-  const pieces = segments(inline);
+  const text =
+    inline.field && context.pageNumber !== undefined
+      ? localizeDigits(
+          String(
+            inline.field === 'pages'
+              ? (context.pageCount ?? 1)
+              : context.pageNumber,
+          ),
+          context.paragraphDirection === 'rtl'
+            ? (context.language ?? inline.properties.complexScriptLanguage)
+            : undefined,
+        )
+      : inline.text;
+  const pieces = segments({ ...inline, text });
   const content =
     pieces.length === 1 ? (
       <span
-        dir={inline.properties.direction}
+        lang={
+          pieces[0].script === 'cs'
+            ? inline.properties.complexScriptLanguage
+            : inline.properties.language
+        }
         style={{
           ...runStyle(inline.properties, pieces[0].script),
-          direction: inline.properties.direction,
-          unicodeBidi: inline.properties.direction ? 'embed' : undefined,
         }}
       >
-        {inline.text}
+        {text}
       </span>
     ) : (
-      <span
-        dir={inline.properties.direction}
-        style={{ whiteSpace: 'pre-wrap' }}
-      >
+      <span style={{ whiteSpace: 'pre-wrap' }}>
         {pieces.map((piece, i) => (
-          <span key={i} style={runStyle(inline.properties, piece.script)}>
+          <span
+            key={i}
+            lang={
+              piece.script === 'cs'
+                ? inline.properties.complexScriptLanguage
+                : inline.properties.language
+            }
+            style={runStyle(inline.properties, piece.script)}
+          >
             {piece.text}
           </span>
         ))}
@@ -289,6 +362,8 @@ function renderParagraph(
     ? 'div'
     : 'p';
   const p = block.properties;
+  const direction = p.direction ?? 'ltr';
+  const inlineContext = { ...context, paragraphDirection: direction };
   const line = p.lineSpacing;
   const mark = block.markProperties;
   const sameStyle = (other: Block | undefined) =>
@@ -297,16 +372,18 @@ function renderParagraph(
     position: 'relative',
     textAlign: p.alignment ?? 'start',
     whiteSpace: 'pre-wrap',
+    direction,
+    unicodeBidi: 'isolate',
     marginTop: `${p.contextualSpacing && sameStyle(previous) ? 0 : (p.spaceBeforePt ?? 0)}pt`,
     marginBottom: `${p.contextualSpacing && sameStyle(next) ? 0 : (p.spaceAfterPt ?? 0)}pt`,
-    marginLeft:
-      p.indentLeftPt === undefined ? undefined : `${p.indentLeftPt}pt`,
-    marginRight:
-      p.indentRightPt === undefined ? undefined : `${p.indentRightPt}pt`,
     marginInlineStart:
-      p.indentStartPt === undefined ? undefined : `${p.indentStartPt}pt`,
+      p.indentStartPt === undefined && p.indentLeftPt === undefined
+        ? undefined
+        : `${p.indentStartPt ?? p.indentLeftPt}pt`,
     marginInlineEnd:
-      p.indentEndPt === undefined ? undefined : `${p.indentEndPt}pt`,
+      p.indentEndPt === undefined && p.indentRightPt === undefined
+        ? undefined
+        : `${p.indentEndPt ?? p.indentRightPt}pt`,
     textIndent: p.list
       ? 0
       : p.firstLinePt === undefined
@@ -333,7 +410,7 @@ function renderParagraph(
   return (
     <Container
       key={key}
-      dir={p.direction}
+      dir={direction}
       style={style}
       data-docx-style={p.styleId}
       data-docx-paragraph=""
@@ -341,6 +418,7 @@ function renderParagraph(
       {p.list && (
         <span
           aria-label="List marker"
+          dir={direction}
           style={{
             ...runStyle(
               p.list.properties,
@@ -351,6 +429,7 @@ function renderParagraph(
             width: `${Math.max(12, Math.abs(p.firstLinePt ?? 18))}pt`,
             textAlign: 'start',
             whiteSpace: 'pre',
+            unicodeBidi: 'isolate',
           }}
         >
           {p.list.marker}
@@ -358,7 +437,9 @@ function renderParagraph(
         </span>
       )}
       {block.children.length ? (
-        block.children.map((inline, i) => renderInline(inline, i, context))
+        block.children.map((inline, i) =>
+          renderInline(inline, i, inlineContext),
+        )
       ) : (
         <br />
       )}
@@ -488,6 +569,10 @@ export interface DocumentRendererProps {
   className?: string;
   style?: CSSProperties;
   pageLayout?: boolean;
+  pageNumber?: number;
+  pageCount?: number;
+  contentTopPt?: number;
+  contentBottomPt?: number;
 }
 /** Flow preview with document page settings; not a Word pagination engine. */
 export function DocumentRenderer({
@@ -495,10 +580,19 @@ export function DocumentRenderer({
   className,
   style,
   pageLayout = false,
+  pageNumber = 1,
+  pageCount = 1,
+  contentTopPt,
+  contentBottomPt,
 }: DocumentRendererProps) {
   const page = document.page,
     margins = page?.margins;
-  const context = { page: pageLayout ? page : undefined };
+  const context: RenderContext = {
+    page: pageLayout ? page : undefined,
+    pageNumber: (page?.pageNumberStart ?? 1) + pageNumber - 1,
+    pageCount,
+    language: document.language,
+  };
   const rgb = document.backgroundColor
     ?.slice(1)
     .match(/../g)
@@ -509,7 +603,7 @@ export function DocumentRenderer({
         width: `${page?.widthPt ?? 595.3}pt`,
         minHeight: `${page?.heightPt ?? 841.9}pt`,
         boxSizing: 'border-box',
-        padding: `${margins?.top ?? 72}pt ${margins?.right ?? 72}pt ${margins?.bottom ?? 72}pt ${margins?.left ?? 72}pt`,
+        padding: `${contentTopPt ?? margins?.top ?? 72}pt ${margins?.right ?? 72}pt ${contentBottomPt ?? margins?.bottom ?? 72}pt ${margins?.left ?? 72}pt`,
         margin: '0 auto',
         backgroundColor: document.backgroundColor ?? '#fff',
         color: dark ? '#fff' : '#000',
@@ -517,9 +611,9 @@ export function DocumentRenderer({
         lineHeight: 'normal',
       }
     : { backgroundColor: document.backgroundColor };
-  const variant = page?.differentFirstPage ? 'first' : 'default';
+  const variant = pageVariant(document, pageNumber);
   const header = document.headers?.[variant],
-    footer = document.footers?.[variant] ?? document.footers?.default;
+    footer = document.footers?.[variant];
   return (
     <div
       className={className}
@@ -545,13 +639,21 @@ export function DocumentRenderer({
           {renderBlocks(header, context)}
         </div>
       )}
-      {renderBlocks(document.blocks, context)}
+      {pageLayout ? (
+        <div data-docx-body="" style={{ display: 'flow-root' }}>
+          {renderBlocks(document.blocks, context)}
+        </div>
+      ) : (
+        renderBlocks(document.blocks, context)
+      )}
       {pageLayout && footer && (
         <div
           data-docx-story="footer"
           style={{
-            position: 'relative',
-            marginTop: `${Math.max(18, (margins?.bottom ?? 72) - (margins?.footer ?? 36))}pt`,
+            position: 'absolute',
+            bottom: `${margins?.footer ?? 36}pt`,
+            left: `${margins?.left ?? 72}pt`,
+            right: `${margins?.right ?? 72}pt`,
           }}
         >
           {renderBlocks(footer, context)}

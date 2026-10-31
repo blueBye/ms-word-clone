@@ -12,6 +12,7 @@ export interface ParseContext {
   relationships: Map<string, Relationship>;
   assets: Map<string, string>;
   tableLayers?: StyleLayer[];
+  numberingLanguage?: string;
   warn(code: string, message: string): void;
 }
 export type BlockParser = (parent: Element, context?: ParseContext) => Block[];

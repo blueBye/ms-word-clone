@@ -26,6 +26,31 @@ function drawingColor(
       : color?.getAttribute('val');
   return value && /^[\da-f]{6}$/i.test(value) ? `#${value}` : undefined;
 }
+/** Read image-wide alpha effects only; clrChange/alpha affects a color, not the whole image. */
+function imageOpacity(blip: Element | undefined): number | undefined {
+  if (!blip) return undefined;
+  let opacity = 1;
+  let specified = false;
+  for (const effect of childElements(blip)) {
+    if (!['alphaModFix', 'alphaOff', 'alpha'].includes(effect.localName ?? ''))
+      continue;
+    const value = numberAttribute(
+      effect,
+      effect.localName === 'alpha' ? 'val' : 'amt',
+      100000,
+    );
+    if (value === undefined) continue;
+    opacity =
+      effect.localName === 'alphaOff'
+        ? opacity + value
+        : effect.localName === 'alpha'
+          ? value
+          : opacity * value;
+    opacity = Math.max(0, Math.min(1, opacity));
+    specified = true;
+  }
+  return specified ? opacity : undefined;
+}
 export function parseDrawing(
   root: Element,
   context?: ParseContext,
@@ -121,6 +146,7 @@ export function parseDrawing(
       image: dataUrl
         ? {
             dataUrl,
+            opacity: imageOpacity(image),
             crop: crop
               ? {
                   left: numberAttribute(crop, 'l', 100000),

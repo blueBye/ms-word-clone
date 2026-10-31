@@ -55,10 +55,11 @@ export async function importDocx(
     if (!valid) throw new Error(`Invalid ${type} part root`);
     return root;
   };
-  const [styleXml, themeXml, numberingXml] = await Promise.all([
+  const [styleXml, themeXml, numberingXml, settingsXml] = await Promise.all([
     relatedXml('styles'),
     relatedXml('theme'),
     relatedXml('numbering'),
+    relatedXml('settings'),
   ]);
   const theme = parseTheme(themeXml);
   const diagnostics: DocumentDiagnostic[] = [];
@@ -71,6 +72,12 @@ export async function importDocx(
     }
   };
   const styles = new Styles(styleXml, theme, warning(path));
+  const xml = parseXml(await pkg.readText(path));
+  const sourceLanguage = /[پچژگکی۰-۹]/u.test(
+    childWord(xml.documentElement!, 'body')?.textContent ?? '',
+  )
+    ? 'fa-IR'
+    : styles.defaults.run.complexScriptLanguage;
   const assets = new Map<string, string>();
   async function context(
     part: string,
@@ -107,11 +114,12 @@ export async function importDocx(
       relationships: rels,
       assets,
       warn: warning(part),
+      numberingLanguage: sourceLanguage,
     };
   }
-  const xml = parseXml(await pkg.readText(path));
   const ctx = await context(path, relationships);
   const document = parseDocumentXml(xml, ctx);
+  if (sourceLanguage) document.language = sourceLanguage;
   const body = childWord(xml.documentElement!, 'body')!;
   const section = childWord(body, 'sectPr');
   if (section) {
@@ -122,6 +130,13 @@ export async function importDocx(
       heightPt: (numericAttribute(size, 'h') ?? 16838) / 20,
       margins: {},
       differentFirstPage: onOff(childWord(section, 'titlePg')),
+      evenAndOddHeaders: settingsXml
+        ? onOff(childWord(settingsXml, 'evenAndOddHeaders'))
+        : false,
+      pageNumberStart: numericAttribute(
+        childWord(section, 'pgNumType'),
+        'start',
+      ),
     };
     for (const side of [
       'top',
@@ -179,8 +194,8 @@ export async function importDocx(
     );
   if (document.headers || document.footers)
     ctx.warn(
-      'story-pagination',
-      'Headers and footers are shown once in the flowing preview; repeating page variants and page numbers are not recalculated.',
+      'pagination-approximation',
+      'Page boundaries and repeating headers/footers use browser layout; spacing and page counts can differ from Word.',
     );
   if (descendants(xml.documentElement!, 'anchor').length)
     ctx.warn(

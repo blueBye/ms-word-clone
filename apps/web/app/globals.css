@@ -35,7 +35,10 @@ h1 { font-size: 15px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .document-canvas { padding: 34px 24px 60px; }
 .document-paper { max-width: 815px; min-height: 980px; padding: 75px 76px; margin: 0 auto; background: #fff; border: 1px solid #dde3de; box-shadow: 0 3px 16px #2c46360a; color: #242b27; font-family: Arial, Tahoma, sans-serif; font-size: 12pt; line-height: 1.8; overflow-wrap: anywhere; }
 .document-paper [data-docx-engine] > p { min-height: 1em; }
-.document-paper.has-document { padding: 0; width: fit-content; max-width: none; min-height: 0; font-family: Arial, Tahoma, sans-serif; }
+.document-paper.has-document { padding: 0; width: fit-content; max-width: none; min-height: 0; font-family: Arial, Tahoma, sans-serif; background: transparent; border: 0; box-shadow: none; }
+.missing-fonts { font-size: 12px; color: #8a6330; line-height: 1.7; max-width: 1000px; }
+.font-warning { padding: 12px 40px; font-size: 12px; color: #8a6330; background: #fff9ec; line-height: 1.8; }
+.font-warning button { margin: 3px 5px; border: 1px solid #e5d8b9; border-radius: 4px; background: white; color: inherit; font-size: 11px; padding: 3px 7px; }
 .document-canvas { overflow-x: auto; }
 .compatibility-notes { padding: 12px 40px; font-size: 12px; background: #fff; border-bottom: 1px solid #dfe6e1; color: #7c7456; }
 .compatibility-notes summary { cursor: pointer; }

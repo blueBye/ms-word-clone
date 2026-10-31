@@ -141,7 +141,12 @@ export class Numbering {
       marker = marker.replace(/\uF0B7/g, '•').replace(/\uF0A7/g, '▪');
     return {
       paragraph: level.paragraph,
-      list: { marker, suffix: level.suffix, properties: level.run },
+      list: {
+        marker,
+        suffix: level.suffix,
+        properties: level.run,
+        format: level.format,
+      },
     };
   }
 }
