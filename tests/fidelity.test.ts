@@ -115,6 +115,93 @@ describe('opacity and bidi regressions', () => {
 });
 
 describe('header/footer fonts and page variants', () => {
+  it.each([
+    ['', 'Latin mark', 10],
+    ['<w:rtl/>', 'CS mark', 20],
+    ['<w:cs/>', 'CS mark', 20],
+    ['<w:rtl w:val="0"/>', 'Latin mark', 10],
+  ])(
+    'chooses an empty paragraph mark font from its run flags (%s), independently of paragraph bidi',
+    async (flag, family, size) => {
+      const doc = await importDocx(
+        docx(
+          documentXml(
+            `<w:p><w:pPr><w:bidi/><w:rPr><w:rFonts w:ascii="Latin mark" w:cs="CS mark"/><w:sz w:val="20"/><w:szCs w:val="40"/>${flag}</w:rPr></w:pPr></w:p>`,
+          ),
+        ),
+      );
+      const markup = render(doc);
+      expect(markup).toContain('<p dir="rtl"');
+      expect(markup).toContain(`font-family:&quot;${family}&quot;`);
+      expect(markup).toContain(`font-size:${size}pt`);
+      expect(markup).toContain('<br/>');
+      expect(getRequiredFonts(doc)).toEqual([{ family, locations: ['body'] }]);
+    },
+  );
+
+  it('uses resolved paragraph typography for nonempty line boxes and retains a line for anchor-only paragraphs', async () => {
+    const source = docx(
+      documentXml(
+        `<w:p><w:pPr><w:bidi/><w:rPr><w:rFonts w:cs="Paragraph face"/><w:szCs w:val="26"/><w:rtl/></w:rPr></w:pPr>${text('Body', '<w:rFonts w:ascii="Run face"/><w:sz w:val="20"/>')}</w:p>`,
+      ),
+    );
+    const doc = await importDocx(source);
+    const markup = render(doc);
+    const p = markup.match(/<p\b[^>]*>/)?.[0];
+    expect(p).toContain('font-family:&quot;Paragraph face&quot;');
+    expect(p).toContain('font-size:13pt');
+    expect(markup).toContain('font-family:&quot;Run face&quot;');
+    expect(markup).toContain('font-size:10pt');
+    expect(getRequiredFonts(doc)).toContainEqual({
+      family: 'Paragraph face',
+      locations: ['body'],
+    });
+    doc.blocks = [
+      {
+        type: 'paragraph',
+        properties: {},
+        markProperties: { fontFamily: 'Times New Roman', fontSizePt: 12 },
+        children: [
+          {
+            type: 'drawing',
+            alt: 'Header artwork',
+            widthPt: 60,
+            heightPt: 60,
+            position: {
+              horizontal: { relativeTo: 'column' },
+              vertical: { relativeTo: 'paragraph' },
+              behindText: false,
+              zIndex: 0,
+              wrap: 'wrapNone',
+            },
+            blocks: [paragraph('Logo caption')],
+          },
+        ],
+      },
+    ];
+    expect(render(doc)).toMatch(
+      /data-docx-drawing="anchor"[\s\S]*<\/div><br\/><\/div>/,
+    );
+  });
+
+  it('retains inherited paragraph-mark typography when there is no direct w:rPr', async () => {
+    const doc = await importDocx(
+      docx(documentXml(`<w:p><w:pPr><w:bidi/></w:pPr>${text('Body')}</w:p>`), {
+        'custom/_rels/main.xml.rels': rels(
+          relationship('styles', 'styles', 'styles.xml'),
+        ),
+        'custom/styles.xml': `<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cs="Default face"/><w:szCs w:val="26"/><w:rtl/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+      }),
+    );
+    expect(getParagraphs(doc.blocks)[0].markProperties?.complexScript).toEqual({
+      fontFamily: 'Default face',
+      fontSizePt: 13,
+    });
+    expect(render(doc).match(/<p\b[^>]*>/)?.[0]).toContain(
+      'font-family:&quot;Default face&quot;',
+    );
+  });
+
   it('includes marker-only fonts when checking document font availability', () => {
     const doc = document([
       paragraph('Body', {
@@ -190,6 +277,93 @@ describe('header/footer fonts and page variants', () => {
 });
 
 describe('measured page construction', () => {
+  it('preserves the three blank paragraphs after a bullet and carries the row border to the page bottom', () => {
+    const blank = () => ({ ...paragraph(''), children: [] });
+    const cell = {
+      column: 0,
+      columnSpan: 1,
+      rowSpan: 1,
+      blocks: [
+        paragraph('Last activity'),
+        blank(),
+        blank(),
+        blank(),
+        paragraph('Next section'),
+      ],
+    };
+    const table: Table = {
+      type: 'table',
+      properties: {},
+      columnsPt: [100],
+      rows: [{ cells: [cell] }],
+    };
+    const before = JSON.stringify(table);
+    const pages = paginateBlocks(
+      [paragraph('Before'), table],
+      [
+        { heightPt: 20 },
+        {
+          heightPt: 100,
+          rowHeightsPt: [100],
+          cells: [[cellMeasurement([30, 10, 10, 10, 40])]],
+        },
+      ],
+      () => 90,
+    );
+    const first = pages[0].blocks[1] as Table;
+    expect(first.rows[0]).toMatchObject({
+      heightPt: 70,
+      heightRule: 'atLeast',
+    });
+    expect(first.rows[0].cells[0].blocks).toHaveLength(4);
+    expect(
+      first.rows[0].cells[0].blocks
+        .slice(1)
+        .every((p) => p.type === 'paragraph' && p.children.length === 0),
+    ).toBe(true);
+    expect(getTextRuns(pages[1].blocks).map((run) => run.text)).toEqual([
+      'Next section',
+    ]);
+    expect(render(document(pages[0].blocks))).toContain(
+      '<tr style="height:70pt"',
+    );
+    expect(pages.every((page) => !page.overflow)).toBe(true);
+    expect(JSON.stringify(table)).toBe(before);
+  });
+
+  it('freezes measured auto-fit column widths in page fragments without mutating the table', () => {
+    const table: Table = {
+      type: 'table',
+      properties: { layout: 'autofit' },
+      columnsPt: [100, 100],
+      rows: ['A', 'B'].map((value) => ({
+        cells: [
+          { column: 0, columnSpan: 2, rowSpan: 1, blocks: [paragraph(value)] },
+        ],
+      })),
+    };
+    const before = JSON.stringify(table);
+    const pages = paginateBlocks(
+      [table],
+      [
+        {
+          heightPt: 120,
+          rowHeightsPt: [60, 60],
+          tableWidthPt: 230,
+          columnWidthsPt: [140, 90],
+        },
+      ],
+      () => 100,
+    );
+    for (const page of pages)
+      expect(page.blocks[0]).toMatchObject({
+        columnsPt: [140, 90],
+        properties: { layout: 'fixed', width: { value: 230, unit: 'pt' } },
+      });
+    expect(pages).toHaveLength(2);
+    expect(JSON.stringify(table)).toBe(before);
+  });
+
   const cellMeasurement = (heights: number[], insetPt = 0): CellMeasurement => {
     let offset = 0;
     return {

@@ -4,12 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { DocumentIR } from '../model/document.js';
 import { DocumentRenderer } from './DocumentRenderer.js';
+import { measureBlocks, measureStoryInset } from './measurement.js';
 import {
   paginateBlocks,
   pageVariant,
   splitPageBreaks,
   type PageSlice,
-  type BlockMeasurement,
 } from './pagination.js';
 
 export interface PaginatedDocumentProps {
@@ -53,64 +53,7 @@ export function PaginatedDocument({
         '[data-measure-body] [data-docx-body]',
       );
       if (!body) return;
-      const outerHeight = (element: Element) => {
-        const style = getComputedStyle(element);
-        return (
-          (element.getBoundingClientRect().height +
-            (parseFloat(style.marginTop) || 0) +
-            (parseFloat(style.marginBottom) || 0)) *
-          0.75
-        );
-      };
-      const measurements: BlockMeasurement[] = Array.from(body.children).map(
-        (element) => {
-          const rows =
-            element.tagName === 'TABLE'
-              ? Array.from(
-                  element.querySelectorAll<HTMLTableRowElement>(
-                    ':scope > tbody > tr',
-                  ),
-                )
-              : undefined;
-          return {
-            heightPt: outerHeight(element),
-            rowHeightsPt: rows?.map(
-              (row) => row.getBoundingClientRect().height * 0.75,
-            ),
-            cells: rows?.map((row) =>
-              Array.from(row.cells).map((cell) => {
-                const style = getComputedStyle(cell);
-                const cellTop = cell.getBoundingClientRect().top;
-                return {
-                  insetPt:
-                    ((parseFloat(style.paddingTop) || 0) +
-                      (parseFloat(style.paddingBottom) || 0) +
-                      ((parseFloat(style.borderTopWidth) || 0) +
-                        (parseFloat(style.borderBottomWidth) || 0)) /
-                        2) *
-                    0.75,
-                  blocks: Array.from(cell.children).map((child) => {
-                    const rect = child.getBoundingClientRect();
-                    const childStyle = getComputedStyle(child);
-                    return {
-                      startPt:
-                        (rect.top -
-                          cellTop -
-                          (parseFloat(childStyle.marginTop) || 0)) *
-                        0.75,
-                      endPt:
-                        (rect.bottom -
-                          cellTop +
-                          (parseFloat(childStyle.marginBottom) || 0)) *
-                        0.75,
-                    };
-                  }),
-                };
-              }),
-            ),
-          };
-        },
-      );
+      const measurements = measureBlocks(body);
       const insets = {} as Insets;
       for (const variant of ['first', 'default', 'even'] as const) {
         const stories = container!.querySelector(
@@ -121,11 +64,11 @@ export function PaginatedDocument({
         insets[variant] = {
           top: Math.max(
             margins?.top ?? 72,
-            header ? (margins?.header ?? 36) + outerHeight(header) : 0,
+            measureStoryInset(header, 'header'),
           ),
           bottom: Math.max(
             margins?.bottom ?? 72,
-            footer ? (margins?.footer ?? 36) + outerHeight(footer) : 0,
+            measureStoryInset(footer, 'footer'),
           ),
         };
       }

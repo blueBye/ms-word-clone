@@ -26,6 +26,13 @@ const NEUTRAL = /^[\p{P}\p{Z}\p{M}\p{Cf}]+$/u;
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 type Script = 'ascii' | 'hAnsi' | 'eastAsia' | 'cs';
 
+function paragraphMarkScript(properties: RunProperties): Script {
+  // A paragraph mark is neutral text. Paragraph bidi does not force CS formatting.
+  return properties.forceComplexScript || properties.direction === 'rtl'
+    ? 'cs'
+    : 'ascii';
+}
+
 function fontFamily(
   name: string | undefined,
   complex = false,
@@ -38,8 +45,8 @@ function runStyle(p: RunProperties, script: Script): CSSProperties {
   const complex = script === 'cs';
   const cs = complex ? p.complexScript : undefined;
   const size = cs?.fontSizePt ?? p.fontSizePt;
-  const bold = complex ? (cs?.bold ?? false) : p.bold;
-  const italic = complex ? (cs?.italic ?? false) : p.italic;
+  const bold = complex ? (cs?.bold ?? false) : (p.bold ?? false);
+  const italic = complex ? (cs?.italic ?? false) : (p.italic ?? false);
   const decoration = [
     p.underline && p.underline !== 'none' ? 'underline' : '',
     p.strike ? 'line-through' : '',
@@ -163,8 +170,12 @@ export function getRequiredFonts(document: DocumentIR): FontRequirement[] {
         add(run.properties, part.script, location);
     for (const paragraph of getParagraphs(blocks)) {
       const script = paragraph.properties.direction === 'rtl' ? 'cs' : 'ascii';
-      if (!paragraph.children.length && paragraph.markProperties)
-        add(paragraph.markProperties, script, location);
+      if (paragraph.markProperties)
+        add(
+          paragraph.markProperties,
+          paragraphMarkScript(paragraph.markProperties),
+          location,
+        );
       if (paragraph.properties.list)
         add(
           paragraph.properties.list.properties,
@@ -229,7 +240,11 @@ function Drawing({
   const width = Math.max(0.001, 1 - (crop?.left ?? 0) - (crop?.right ?? 0));
   const height = Math.max(0.001, 1 - (crop?.top ?? 0) - (crop?.bottom ?? 0));
   return (
-    <Container style={style} data-docx-drawing={anchor ? 'anchor' : 'inline'}>
+    <Container
+      style={style}
+      data-docx-drawing={anchor ? 'anchor' : 'inline'}
+      data-docx-behind-text={anchor?.behindText ? 'true' : undefined}
+    >
       {d.image && (
         <img
           src={d.image.dataUrl}
@@ -366,9 +381,15 @@ function renderParagraph(
   const inlineContext = { ...context, paragraphDirection: direction };
   const line = p.lineSpacing;
   const mark = block.markProperties;
+  const markStyle = mark && runStyle(mark, paragraphMarkScript(mark));
   const sameStyle = (other: Block | undefined) =>
     other?.type === 'paragraph' && other.properties.styleId === p.styleId;
   const style: CSSProperties = {
+    // The paragraph font contributes to every line box, even with styled runs.
+    fontFamily: markStyle?.fontFamily,
+    fontSize: markStyle?.fontSize,
+    fontWeight: markStyle?.fontWeight,
+    fontStyle: markStyle?.fontStyle,
     position: 'relative',
     textAlign: p.alignment ?? 'start',
     whiteSpace: 'pre-wrap',
@@ -403,9 +424,7 @@ function renderParagraph(
     breakInside: p.keepLines ? 'avoid' : undefined,
     breakBefore: p.pageBreakBefore ? 'page' : undefined,
     tabSize: p.tabs?.[0]?.positionPt ? `${p.tabs[0].positionPt}pt` : 4,
-    ...(!block.children.length && mark
-      ? runStyle(mark, p.direction === 'rtl' ? 'cs' : 'ascii')
-      : {}),
+    ...(!block.children.length && mark ? markStyle : {}),
   };
   return (
     <Container
@@ -436,13 +455,16 @@ function renderParagraph(
           {p.list.suffix === 'nothing' ? '' : ' '}
         </span>
       )}
-      {block.children.length ? (
-        block.children.map((inline, i) =>
-          renderInline(inline, i, inlineContext),
-        )
-      ) : (
-        <br />
+      {block.children.map((inline, i) =>
+        renderInline(inline, i, inlineContext),
       )}
+      {!block.children.some((inline) =>
+        inline.type === 'drawing'
+          ? !inline.position
+          : inline.type === 'text'
+            ? !!inline.text && !inline.properties.hidden
+            : true,
+      ) && <br />}
     </Container>
   );
 }

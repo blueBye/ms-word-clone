@@ -144,7 +144,7 @@ export function parseParagraph(
     properties,
     children,
     ...(context ? { directProperties: direct } : {}),
-    ...(mark
+    ...(Object.keys(markProperties).length
       ? {
           markProperties,
         }

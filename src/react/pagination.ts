@@ -11,6 +11,8 @@ export interface BlockMeasurement {
   heightPt: number;
   rowHeightsPt?: number[];
   cells?: CellMeasurement[][];
+  tableWidthPt?: number;
+  columnWidthsPt?: number[];
 }
 export interface CellMeasurement {
   /** Block bounds include paragraph margins, in the cell's coordinate space. */
@@ -225,7 +227,27 @@ export function paginateBlocks(
     let fragmentHeight = overhead;
     let continued = false;
     const commit = () => {
-      if (rows.length) add({ ...block, rows } as Table, fragmentHeight);
+      if (rows.length)
+        add(
+          {
+            ...block,
+            // Auto-layout must not resize columns when a fragment omits other rows.
+            ...(measurement.columnWidthsPt?.length
+              ? {
+                  columnsPt: measurement.columnWidthsPt,
+                  properties: {
+                    ...block.properties,
+                    layout: 'fixed',
+                    width: measurement.tableWidthPt
+                      ? { value: measurement.tableWidthPt, unit: 'pt' }
+                      : block.properties.width,
+                  },
+                }
+              : {}),
+            rows,
+          } as Table,
+          fragmentHeight,
+        );
       rows = [];
       fragmentHeight = overhead;
     };
@@ -264,8 +286,20 @@ export function paginateBlocks(
           rows.push(...block.rows.slice(0, headerCount));
           fragmentHeight += headerHeight;
         }
-        rows.push(...(split ? [split.first.row] : group));
-        fragmentHeight += split ? split.first.heightPt : groupHeight;
+        // Continue the row border to the content bottom when a paragraph moves
+        // to the next page, rather than closing it immediately after the text.
+        rows.push(
+          ...(split
+            ? [
+                {
+                  ...split.first.row,
+                  heightPt: available,
+                  heightRule: 'atLeast' as const,
+                },
+              ]
+            : group),
+        );
+        fragmentHeight += split ? available : groupHeight;
         if (!split) break;
         commit();
         finish();
