@@ -48,6 +48,54 @@ const render = (document: DocumentIR, number = 1, count = 1) =>
     }),
   );
 
+describe('form-symbol text presentation', () => {
+  it.each(['⬜', '⬜ ', '☐', '☑', '☒', '□', '⬜\uFE0E'])(
+    'renders standalone %s from an emoji font as a monochrome symbol without rewriting it',
+    async (value) => {
+      const doc = await importDocx(
+        docx(
+          documentXml(
+            `<w:p><w:pPr><w:bidi/></w:pPr>${text(value, '<w:rFonts w:ascii="Segoe UI Emoji" w:hAnsi="Segoe UI Emoji" w:cs="Segoe UI Emoji" w:eastAsia="Wingdings 2"/><w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>')}</w:p>`,
+          ),
+        ),
+      );
+      const before = JSON.stringify(doc);
+      const markup = render(doc);
+      expect(markup).toContain('font-variant-emoji:text');
+      expect(markup).toContain('font-family:&quot;Segoe UI Symbol&quot;');
+      expect(markup).toContain('font-size:13pt');
+      expect(markup).toContain(value);
+      expect(markup).not.toContain('<input');
+      expect(getTextRuns(doc.blocks)[0].text).toBe(value);
+      expect(JSON.stringify(doc)).toBe(before);
+    },
+  );
+
+  it.each(['😀', '🟪', '⬜\uFE0F'])(
+    'preserves ordinary or explicitly requested emoji %s',
+    (value) => {
+      const doc = document([paragraph(value)]);
+      const run = getTextRuns(doc.blocks)[0];
+      run.properties.fontFamily = 'Segoe UI Emoji';
+      const markup = render(doc);
+      expect(markup).not.toContain('font-variant-emoji:text');
+      expect(markup).toContain(value);
+    },
+  );
+
+  it('retains the source font for an ordinary text square', () => {
+    const doc = document([paragraph('□')]);
+    getTextRuns(doc.blocks)[0].properties = {
+      fontFamily: 'Arial',
+      fontSizePt: 15,
+    };
+    const markup = render(doc);
+    expect(markup).toContain('font-family:&quot;Arial&quot;');
+    expect(markup).toContain('font-size:15pt');
+    expect(markup).not.toContain('font-variant-emoji:text');
+  });
+});
+
 describe('opacity and bidi regressions', () => {
   it.each([
     ['0', 0],

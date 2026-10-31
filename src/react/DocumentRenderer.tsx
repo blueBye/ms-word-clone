@@ -114,6 +114,28 @@ function segments(run: TextRun): { text: string; script: Script }[] {
   }
   return result.length ? result : [{ text: '', script: 'ascii' }];
 }
+
+function textStyle(
+  properties: RunProperties,
+  script: Script,
+  text: string,
+): CSSProperties {
+  const style = runStyle(properties, script);
+  // Some Word forms use an emoji white square as a checkbox. Use a text font
+  // for standalone box glyphs, preserving the character and explicit emoji VS16.
+  if (
+    /emoji/i.test(style.fontFamily ?? '') &&
+    /^\s*[\u25a1\u2610-\u2612\u2b1c][\s\uFE0E]*$/u.test(text)
+  ) {
+    return {
+      ...style,
+      fontFamily:
+        '"Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", Arial, sans-serif',
+      fontVariantEmoji: 'text',
+    };
+  }
+  return style;
+}
 function borderValue(border: Border | undefined): string | undefined {
   if (!border) return undefined;
   if (border.style === 'nil' || border.style === 'none') return 'hidden';
@@ -328,9 +350,7 @@ function renderInline(
             ? inline.properties.complexScriptLanguage
             : inline.properties.language
         }
-        style={{
-          ...runStyle(inline.properties, pieces[0].script),
-        }}
+        style={textStyle(inline.properties, pieces[0].script, text)}
       >
         {text}
       </span>
@@ -344,7 +364,7 @@ function renderInline(
                 ? inline.properties.complexScriptLanguage
                 : inline.properties.language
             }
-            style={runStyle(inline.properties, piece.script)}
+            style={textStyle(inline.properties, piece.script, piece.text)}
           >
             {piece.text}
           </span>
