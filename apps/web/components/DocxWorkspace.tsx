@@ -1,388 +1,1505 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  getParagraphs,
-  getTextRuns,
-  importDocx,
+  openDocxSession,
+  createBlankDocx,
+  type DocxSession,
   type DocumentIR,
-} from '@local/docx-ir-engine';
+  type EditCommand,
+  type ParagraphFormat,
+  type RunFormat,
+} from "@local/docx-ir-engine";
+import { PaginatedDocument } from "@local/docx-ir-engine/react";
 import {
-  PaginatedDocument,
-  getRequiredFonts,
-  type FontRequirement,
-} from '@local/docx-ir-engine/react';
+  paragraphs,
+  paragraphText,
+  textChange,
+  download,
+  selectionRanges,
+  literalMatches,
+  changeCase,
+} from "../lib/editor";
+import { Ribbon, type RibbonTab } from "./editor/Ribbon";
+import { Tool } from "./editor/Controls";
+import { Icon } from "./editor/Icon";
+import { FontPanel, useDocumentFonts } from "./editor/FontPanel";
+import { WorkspaceDialogs, type EditorModal } from "./editor/WorkspaceDialogs";
+import { Backstage } from "./editor/Backstage";
+import { usePageEditor, type PageSelection } from "./editor/usePageEditor";
+import { HomeRibbon } from "./editor/HomeRibbon";
+import { HomeDialogs } from "./editor/HomeDialogs";
 
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
+type Pane =
+  | "find"
+  | "replace"
+  | "edit"
+  | "fonts"
+  | "compatibility"
+  | "styles"
+  | "outline"
+  | null;
+const MAX_BYTES = 50 * 1024 * 1024;
+const titles: Record<Exclude<Pane, null>, string> = {
+  find: "Navigation",
+  replace: "Find and replace",
+  edit: "Paragraph editor",
+  fonts: "Document fonts",
+  compatibility: "Document compatibility",
+  styles: "Styles",
+  outline: "Document outline",
+};
 
 export function DocxWorkspace() {
-  const [document, setDocument] = useState<DocumentIR | null>(null);
-  const [filename, setFilename] = useState('Sample document.docx');
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState('');
-  const [fontFamily, setFontFamily] = useState('');
-  const [fontStatus, setFontStatus] = useState('');
-  const [fontRevision, setFontRevision] = useState(0);
-  const [missingFonts, setMissingFonts] = useState<FontRequirement[]>([]);
-  const [pageCount, setPageCount] = useState(0);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const fontPanel = useRef<HTMLDetailsElement>(null);
-  const request = useRef(0);
-  const fonts = useRef<FontFace[]>([]);
-  const loadedFamilies = useRef(new Set<string>());
-  const requiredFonts = useMemo(
-    () => (document ? getRequiredFonts(document) : []),
-    [document],
+  const [document, setDocument] = useState<DocumentIR | null>(null),
+    [session, setSession] = useState<DocxSession | null>(null);
+  const [filename, setFilename] = useState("Sample document.docx"),
+    [busy, setBusy] = useState(true),
+    [error, setError] = useState("");
+  const [tab, setTab] = useState<RibbonTab>("Home"),
+    [pane, setPane] = useState<Pane>(null),
+    [modal, setModal] = useState<EditorModal>(null);
+  const [fileView, setFileView] = useState<string | null>(null),
+    [selectedId, setSelectedId] = useState("");
+  const [range, setRange] = useState<{ start: number; end: number } | null>(
+      null,
+    ),
+    [draft, setDraft] = useState("");
+  const [pageCount, setPageCount] = useState(0),
+    [currentPage, setCurrentPage] = useState(1),
+    [zoom, setZoom] = useState(1);
+  const [query, setQuery] = useState(""),
+    [replacement, setReplacement] = useState(""),
+    [matchCase, setMatchCase] = useState(false);
+  const [notice, setNotice] = useState(
+    "Click on the page and type. Use Home to format your text.",
   );
-
+  const [revision, setRevision] = useState(0),
+    [downloaded, setDownloaded] = useState(-1);
+  const [showMarks, setShowMarks] = useState(false),
+    [painter, setPainter] = useState<RunFormat | null>(null);
+  const [homeDialog, setHomeDialog] = useState<string | null>(null),
+    [styleList, setStyleList] = useState<{ id: string; name: string }[]>([]);
+  const [clipboard, setClipboard] = useState<string[]>([]),
+    [scope, setScope] = useState<PageSelection[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null),
+    canvas = useRef<HTMLDivElement>(null),
+    textInput = useRef<HTMLTextAreaElement>(null);
+  const request = useRef(0),
+    changing = useRef(false),
+    activeSession = useRef<DocxSession | null>(null);
+  const all = useMemo(() => paragraphs(document), [document]),
+    selected = all.find((p) => p.id === selectedId);
+  const text = selected ? paragraphText(selected) : "",
+    draftDirty = !!selected && draft !== text;
+  const unsaved = draftDirty || (!!session?.dirty && downloaded !== revision);
+  const fonts = useDocumentFonts(document),
+    capability = session?.capability(selectedId),
+    canFormat = !!capability?.format;
+  const words = useMemo(
+    () =>
+      all.reduce(
+        (sum, p) =>
+          sum +
+          Array.from(
+            new Intl.Segmenter(document?.language, {
+              granularity: "word",
+            }).segment(paragraphText(p)),
+          ).filter((s) => s.isWordLike).length,
+        0,
+      ),
+    [all, document?.language],
+  );
+  const results = useMemo(() => {
+    if (!query) return [];
+    return all.flatMap((p) => {
+      const content = paragraphText(p),
+        hit = literalMatches(content, query, matchCase)[0];
+      return hit ? [{ id: p.id!, content, ...hit }] : [];
+    });
+  }, [all, query, matchCase]);
+  const editor = usePageEditor({
+    container: canvas,
+    session,
+    document,
+    isBusy: () => changing.current,
+    onCommit: (next) => {
+      setDocument(next);
+      setRevision((r) => r + 1);
+    },
+    onSelect: (picked, value) => {
+      setSelectedId(picked.id);
+      setRange({ start: picked.start, end: picked.end });
+      setDraft(value);
+      setScope([]);
+    },
+    onCommand: execute,
+    onHistory: (direction) => void history(direction),
+    onError: setError,
+    onNotice: setNotice,
+  });
   useEffect(() => {
-    let cancelled = false;
-    Promise.all(
-      requiredFonts.map(async (font) => {
-        if (loadedFamilies.current.has(font.family.toLowerCase())) return null;
-        try {
-          // Unlike FontFaceSet.check(), local() loading fails if a requested face is absent.
-          // The probe is not registered, so it does not replace native bold/italic faces.
-          // local() uses face names, which may differ from the family: e.g.
-          // family Pofak has full name "Pofak Regular" / PostScript "Pofak-Regular".
-          const localNames = [
-            font.family,
-            `${font.family} Regular`,
-            `${font.family.replace(/\s+/g, '')}-Regular`,
-          ];
-          await new FontFace(
-            '__docx_font_probe__',
-            localNames
-              .map((name) => `local(${JSON.stringify(name)})`)
-              .join(', '),
-          ).load();
-          return null;
-        } catch {
-          return font;
-        }
-      }),
-    ).then((result) => {
-      if (!cancelled)
-        setMissingFonts(
-          result.filter((font): font is FontRequirement => font !== null),
-        );
+    let current = true;
+    session?.styles().then((items) => {
+      if (current) setStyleList(items);
     });
     return () => {
-      cancelled = true;
+      current = false;
     };
-  }, [requiredFonts, fontRevision]);
+  }, [session, document]);
+  useEffect(() => {
+    editor.refresh();
+    editor.focus();
+  }, [showMarks]);
 
-  async function open(read: () => Promise<ArrayBuffer>, name: string) {
-    const current = ++request.current;
+  async function open(bytes: Uint8Array, name: string) {
+    const token = ++request.current;
     setBusy(true);
-    setError('');
-    setDocument(null);
-    setPageCount(0);
-    setFilename(name);
+    setError("");
     try {
-      const result = await importDocx(await read(), {
-        maxUncompressedBytes: MAX_FILE_BYTES,
+      if (bytes.byteLength > MAX_BYTES)
+        throw new Error("Choose a DOCX smaller than 50 MB.");
+      const next = await openDocxSession(bytes, {
+        maxUncompressedBytes: MAX_BYTES,
       });
-      if (current === request.current) setDocument(result);
+      if (token !== request.current) return;
+      activeSession.current = next;
+      setSession(next);
+      setDocument(next.document);
+      setFilename(name);
+      const first = paragraphs(next.document)[0];
+      setSelectedId(first?.id ?? "");
+      setDraft(first ? paragraphText(first) : "");
+      setRange(null);
+      setRevision(0);
+      setDownloaded(-1);
+      setPageCount(0);
+      setCurrentPage(1);
+      setFileView(null);
+      setPane(null);
+      setScope([]);
+      setPainter(null);
+      setHomeDialog(null);
+      setNotice(
+        next.lockedReason ??
+          "Click on the page and type. Use Home to format your text.",
+      );
     } catch (cause) {
-      if (current === request.current)
+      if (token === request.current)
         setError(
           cause instanceof Error
             ? cause.message
-            : 'The file could not be opened.',
+            : "Could not open this document.",
         );
     } finally {
-      if (current === request.current) setBusy(false);
+      if (token === request.current) setBusy(false);
     }
   }
-
-  function openSample() {
-    return open(async () => {
-      const response = await fetch('/sample.docx');
+  function discardOK() {
+    return (
+      !unsaved ||
+      window.confirm(
+        "Some changes have not been downloaded. Discard them and open another document?",
+      )
+    );
+  }
+  async function sample(initial = false) {
+    if (!initial && !discardOK()) return;
+    try {
+      const response = await fetch("/sample.docx");
       if (!response.ok)
         throw new Error(
-          'The sample could not be loaded. You can still open your own DOCX file.',
+          "Sample unavailable. Open a DOCX or start a blank document.",
         );
-      return response.arrayBuffer();
-    }, 'Sample document.docx');
-  }
-
-  useEffect(() => {
-    void openSample();
-    return () => {
-      request.current++;
-      for (const font of fonts.current) window.document.fonts.delete(font);
-    };
-  }, []);
-
-  async function loadFont(file: File) {
-    if (!fontFamily.trim()) {
-      setFontStatus('Enter the font family name first.');
-      return;
-    }
-    setFontStatus('Loading font…');
-    try {
-      const font = await new FontFace(
-        fontFamily.trim(),
-        await file.arrayBuffer(),
-      ).load();
-      window.document.fonts.add(font);
-      fonts.current.push(font);
-      loadedFamilies.current.add(fontFamily.trim().toLowerCase());
-      setFontRevision((value) => value + 1);
-      setFontStatus(`“${font.family}” is ready to use in this document.`);
-    } catch {
-      setFontStatus(
-        'Could not load this font. Try a TTF, OTF, WOFF or WOFF2 file.',
+      await open(
+        new Uint8Array(await response.arrayBuffer()),
+        "Sample document.docx",
+      );
+    } catch (cause) {
+      setBusy(false);
+      setError(
+        cause instanceof Error ? cause.message : "Could not load sample.",
       );
     }
   }
+  useEffect(() => {
+    void sample(true);
+    return () => {
+      request.current++;
+    };
+  }, []);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (unsaved) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+  useEffect(() => {
+    canvas.current
+      ?.querySelectorAll<HTMLElement>("[data-docx-page] [data-paragraph-id]")
+      .forEach((node) =>
+        node.toggleAttribute(
+          "data-selected",
+          scope.length
+            ? scope.some((target) => target.id === node.dataset.paragraphId)
+            : node.dataset.paragraphId === selectedId,
+        ),
+      );
+  }, [selectedId, document, pageCount, zoom, scope]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        setFileView(null);
+        window.document
+          .querySelectorAll<HTMLDetailsElement>(".tool-menu[open]")
+          .forEach((e) => (e.open = false));
+      }
+      if (event.ctrlKey || event.metaKey) {
+        if (event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          void save();
+        }
+        if (event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          setPane("find");
+        }
+        if (event.key.toLowerCase() === "o") {
+          event.preventDefault();
+          fileInput.current?.click();
+        }
+        const field = (event.target as Element)?.closest(
+          "input,textarea,select",
+        );
+        if (
+          !field &&
+          event.key.toLowerCase() === "a" &&
+          canvas.current?.contains(window.document.activeElement)
+        ) {
+          event.preventDefault();
+          void action("selectAll");
+        }
+        if (!field && event.key.toLowerCase() === "d" && selected) {
+          event.preventDefault();
+          setHomeDialog("font");
+        }
+        if (!field && ["b", "i", "u"].includes(event.key.toLowerCase())) {
+          event.preventDefault();
+          const key = event.key.toLowerCase();
+          run(
+            key === "b"
+              ? { bold: !activeRun().bold }
+              : key === "i"
+                ? { italic: !activeRun().italic }
+                : {
+                    underline:
+                      activeRun().underline && activeRun().underline !== "none"
+                        ? "none"
+                        : "single",
+                  },
+          );
+        }
+        if (!field && event.key.toLowerCase() === "z") {
+          event.preventDefault();
+          void history(event.shiftKey ? "redo" : "undo");
+        }
+        if (!field && event.key.toLowerCase() === "y") {
+          event.preventDefault();
+          void history("redo");
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  useEffect(() => {
+    const container = canvas.current;
+    if (!container) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible)
+          setCurrentPage(
+            Number((visible.target as HTMLElement).dataset.docxPage),
+          );
+      },
+      { root: container, threshold: [0.05, 0.25, 0.5] },
+    );
+    container
+      .querySelectorAll("[data-docx-page]")
+      .forEach((e) => observer.observe(e));
+    return () => observer.disconnect();
+  }, [document, pageCount]);
 
-  const runs = document ? getTextRuns(document.blocks) : [];
-  const paragraphs = document ? getParagraphs(document.blocks) : [];
-  const storyRuns = document
-    ? [
-        ...Object.values(document.headers ?? {}),
-        ...Object.values(document.footers ?? {}),
-      ].flatMap((blocks) => getTextRuns(blocks ?? []))
-    : [];
-  const families = [
-    ...new Set(
-      [...runs, ...storyRuns]
-        .flatMap((run) => [
-          run.properties.fontFamily,
-          ...Object.values(run.properties.fontSlots ?? {}),
-          run.properties.complexScript?.fontFamily,
-        ])
-        .filter((name): name is string => !!name),
-    ),
-  ];
+  async function flushDraft(active: DocxSession) {
+    if (editor.hasBuffer()) {
+      await editor.flush();
+      return;
+    }
+    const current = paragraphs(active.document).find(
+      (p) => p.id === selectedId,
+    );
+    if (draftDirty && current && paragraphText(current) !== draft) {
+      await active.execute({
+        type: "text",
+        id: selectedId,
+        ...textChange(paragraphText(current), draft),
+      });
+      setRevision((r) => r + 1);
+    }
+  }
+  function sync(active: DocxSession, target?: PageSelection) {
+    if (activeSession.current !== active) return;
+    const picked = target ?? editor.getSelection();
+    setDocument(active.document);
+    const p =
+      paragraphs(active.document).find(
+        (p) => p.id === (picked?.id ?? selectedId),
+      ) ?? paragraphs(active.document)[0];
+    setSelectedId(p?.id ?? "");
+    setDraft(p ? paragraphText(p) : "");
+    if (picked && p?.id === picked.id) {
+      setRange({ start: picked.start, end: picked.end });
+      editor.select(picked);
+    }
+  }
+  async function execute(command: EditCommand) {
+    const active = activeSession.current;
+    if (!active || changing.current) return false;
+    changing.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      if (command.type !== "text") await flushDraft(active);
+      await active.execute(command);
+      sync(
+        active,
+        command.type === "splitParagraph" || command.type === "joinParagraph"
+          ? active.selection
+          : undefined,
+      );
+      setRevision((r) => r + 1);
+      setNotice("Changes on this device. Download DOCX to save a copy.");
+      return true;
+    } catch (cause) {
+      sync(active);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The change could not be applied.",
+      );
+      return false;
+    } finally {
+      changing.current = false;
+      setBusy(false);
+    }
+  }
+  async function executeMany(commands: EditCommand[]) {
+    if (commands.length === 1) return execute(commands[0]);
+    const active = activeSession.current;
+    if (!active || changing.current || !commands.length) return false;
+    changing.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await flushDraft(active);
+      await active.executeBatch(commands);
+      sync(active);
+      setRevision((r) => r + 1);
+      setNotice(`${commands.length} changes applied as one undo action.`);
+      return true;
+    } catch (cause) {
+      sync(active);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Changes could not be applied.",
+      );
+      return false;
+    } finally {
+      changing.current = false;
+      setBusy(false);
+    }
+  }
+  async function history(direction: "undo" | "redo") {
+    const active = activeSession.current;
+    if (!active || changing.current) return;
+    changing.current = true;
+    setBusy(true);
+    try {
+      await flushDraft(active);
+      await active[direction]();
+      sync(active);
+      setRevision((r) => r + 1);
+      setNotice(direction === "undo" ? "Change undone." : "Change restored.");
+      editor.focus();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not restore history.",
+      );
+    } finally {
+      changing.current = false;
+      setBusy(false);
+    }
+  }
+  async function save() {
+    const active = activeSession.current;
+    if (!active || changing.current) return;
+    changing.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await flushDraft(active);
+      sync(active);
+      download(await active.exportDocx(), filename);
+      setDownloaded(revision + (draftDirty ? 1 : 0));
+      setNotice(
+        "DOCX download started. The original file has not been overwritten.",
+      );
+      setFileView(null);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not download DOCX.",
+      );
+    } finally {
+      changing.current = false;
+      setBusy(false);
+    }
+  }
+  function select(id: string, edit = false) {
+    if (busy) return;
+    if (draftDirty && id !== selectedId) {
+      setNotice(
+        "Apply or cancel paragraph text changes before selecting another paragraph.",
+      );
+      return;
+    }
+    const p = all.find((p) => p.id === id);
+    if (!p) return;
+    if (id !== selectedId) {
+      setSelectedId(id);
+      setDraft(paragraphText(p));
+      setRange(null);
+    }
+    if (edit) {
+      setPane("edit");
+      setTimeout(() => textInput.current?.focus(), 0);
+    }
+  }
+  function jump(id: string) {
+    select(id);
+    editor.select({ id, start: 0, end: 0 });
+    canvas.current
+      ?.querySelector<HTMLElement>(
+        `[data-docx-page] [data-paragraph-id="${CSS.escape(id)}"]`,
+      )
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function activeRun(): RunFormat {
+    const picked = editor.getSelection(),
+      p = all.find((p) => p.id === (picked?.id ?? selectedId));
+    let offset = 0;
+    const runs = p?.children.filter((c) => c.type === "text") ?? [];
+    const current =
+      runs.find((r) => {
+        offset += r.text.length;
+        return offset >= (picked?.start ?? 0);
+      })?.properties ?? p?.markProperties;
+    const char = p
+      ? paragraphText(p).slice(
+          Math.max(0, (picked?.start ?? 0) - 1),
+          (picked?.start ?? 0) + 1,
+        )
+      : "";
+    const cs =
+      current?.forceComplexScript ||
+      current?.direction === "rtl" ||
+      /[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(char);
+    const base = editor.typingFormat.clear ? p?.markProperties : current;
+    return {
+      ...base,
+      fontFamily: cs
+        ? (base?.complexScript?.fontFamily ?? base?.fontFamily)
+        : base?.fontFamily,
+      fontSizePt: cs
+        ? (base?.complexScript?.fontSizePt ?? base?.fontSizePt)
+        : base?.fontSizePt,
+      bold: cs ? base?.complexScript?.bold : base?.bold,
+      italic: cs ? base?.complexScript?.italic : base?.italic,
+      complexScriptFont: base?.complexScript?.fontFamily,
+      complexScriptSizePt: base?.complexScript?.fontSizePt,
+      underline: base?.underline as RunFormat["underline"],
+      ...editor.typingFormat,
+    };
+  }
+  function targets() {
+    return scope.length
+      ? scope
+      : editor.getSelection()
+        ? [editor.getSelection()!]
+        : selected
+          ? [
+              {
+                id: selectedId,
+                start: range?.start ?? 0,
+                end: range?.end ?? text.length,
+              },
+            ]
+          : [];
+  }
+  function run(format: RunFormat) {
+    const picked = editor.getSelection();
+    if (!scope.length && picked && picked.start === picked.end) {
+      editor.setTyping({ ...editor.typingFormat, ...format });
+      editor.focus();
+      return;
+    }
+    void executeMany(
+      targets().map((target) => ({
+        type: "run",
+        id: target.id,
+        format,
+        start: target.start,
+        end: target.end,
+      })),
+    );
+  }
+  function para(format: ParagraphFormat) {
+    void executeMany(
+      targets().map((target) => ({ type: "paragraph", id: target.id, format })),
+    );
+  }
+  function insertText(value: string) {
+    if (!selected || !canFormat) return;
+    if (!editor.getSelection())
+      editor.select({
+        id: selectedId,
+        start: range?.start ?? text.length,
+        end: range?.end ?? text.length,
+      });
+    editor.insert(value);
+  }
+  function page(
+    widthPt: number,
+    heightPt: number,
+    margins?: { top: number; bottom: number; left: number; right: number },
+  ) {
+    void execute({ type: "page", widthPt, heightPt, margins });
+  }
+  async function action(name: string) {
+    if (name === "marks") {
+      setShowMarks((value) => !value);
+      return;
+    }
+    if (name === "painter") {
+      setPainter((value) => (value ? null : activeRun()));
+      setNotice("Format Painter: select the destination text on the page.");
+      return;
+    }
+    if (name === "clear") {
+      run({ clear: true });
+      return;
+    }
+    if (name.startsWith("list:")) {
+      const kind = name.slice(5) as "bullet" | "decimal";
+      void executeMany(
+        targets().map((target) => ({ type: "list", id: target.id, kind })),
+      );
+      return;
+    }
+    if (name.startsWith("level:")) {
+      const level = Math.max(
+        0,
+        Math.min(
+          8,
+          (selected?.properties.numbering?.level ?? 0) +
+            (name === "level:up" ? 1 : -1),
+        ),
+      );
+      const kind =
+        selected?.properties.list?.format === "bullet"
+          ? "bullet"
+          : selected?.properties.list?.format === "lowerLetter"
+            ? "lowerLetter"
+            : selected?.properties.list?.format === "upperRoman"
+              ? "upperRoman"
+              : "decimal";
+      void executeMany(
+        targets().map((target) => ({
+          type: "list",
+          id: target.id,
+          kind,
+          level,
+        })),
+      );
+      return;
+    }
+    if (name === "selectAll" || name === "selectSimilar") {
+      await editor.flush();
+      const candidates =
+        name === "selectAll"
+          ? all
+          : all.filter(
+              (p) => p.properties.styleId === selected?.properties.styleId,
+            );
+      const ranges = candidates
+        .filter((p) => session?.capability(p.id!).format)
+        .map((p) => ({ id: p.id!, start: 0, end: paragraphText(p).length }));
+      setScope(ranges);
+      setNotice(`${ranges.length} editable paragraphs selected.`);
+      return;
+    }
+    if (name.startsWith("goto:")) {
+      canvas.current
+        ?.querySelector(
+          `[data-docx-page="${Math.max(1, Math.min(pageCount, Number(name.slice(5))))}"]`,
+        )
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+    if (name.startsWith("case:")) {
+      const commands: EditCommand[] = [];
+      for (const target of targets()) {
+        const p = all.find((p) => p.id === target.id);
+        if (!p) continue;
+        const value = paragraphText(p);
+        let start = target.start,
+          end = target.end;
+        if (start === end) {
+          const word = Array.from(
+            new Intl.Segmenter(document?.language, {
+              granularity: "word",
+            }).segment(value),
+          ).find(
+            (part) =>
+              part.isWordLike &&
+              part.index <= start &&
+              part.index + part.segment.length >= start,
+          );
+          if (!word) continue;
+          start = word.index;
+          end = start + word.segment.length;
+        }
+        commands.push({
+          type: "text",
+          id: target.id,
+          start,
+          end,
+          text: changeCase(
+            value.slice(start, end),
+            name.slice(5),
+            document?.language,
+          ),
+        });
+      }
+      await executeMany(commands);
+      return;
+    }
+    if (name.startsWith("symbol:")) {
+      insertText(name.slice(7));
+      return;
+    }
+    const w = document?.page?.widthPt ?? 595.3,
+      h = document?.page?.heightPt ?? 841.9;
+    if (name.startsWith("margin:")) {
+      const n = Number(name.slice(7));
+      page(w, h, {
+        top: n === 54 ? 72 : n,
+        bottom: n === 54 ? 72 : n,
+        left: n,
+        right: n,
+      });
+      return;
+    }
+    if (name.startsWith("size:")) {
+      const [width, height] = name.slice(5).split(",").map(Number);
+      page(width, height);
+      return;
+    }
+    if (name.startsWith("orientation:")) {
+      const landscape = name.endsWith("Landscape");
+      page(
+        landscape ? Math.max(w, h) : Math.min(w, h),
+        landscape ? Math.min(w, h) : Math.max(w, h),
+      );
+      return;
+    }
+    if (
+      ["fonts", "find", "replace", "edit", "styles", "outline"].includes(name)
+    ) {
+      setPane(name as Pane);
+      return;
+    }
+    if (name === "stories") {
+      setPane("outline");
+      return;
+    }
+    if (["page", "paragraph", "table"].includes(name)) {
+      setModal(name as EditorModal);
+      return;
+    }
+    if (name === "insertParagraph" || name === "blankPage") {
+      await execute({
+        type: "insertParagraph",
+        id: selectedId || undefined,
+        text: "",
+        pageBreakBefore: name === "blankPage",
+      });
+      return;
+    }
+    if (name === "date") {
+      insertText(
+        new Intl.DateTimeFormat(document?.language ?? "en", {
+          dateStyle: "long",
+          calendar: "gregory",
+        }).format(new Date()),
+      );
+      return;
+    }
+    if (name === "copy" || name === "cut") {
+      try {
+        const picked = targets(),
+          value = picked
+            .map((target) => {
+              const p = all.find((p) => p.id === target.id);
+              const value =
+                target.id === selectedId ? draft : p ? paragraphText(p) : "";
+              return value.slice(target.start, target.end);
+            })
+            .join("\n");
+        await navigator.clipboard.writeText(value);
+        setClipboard((items) =>
+          [value, ...items.filter((item) => item !== value)].slice(0, 12),
+        );
+        if (name === "cut")
+          await executeMany(
+            picked.map((target) => ({
+              type: "text",
+              id: target.id,
+              start: target.start,
+              end: target.end,
+              text: "",
+            })),
+          );
+        else setNotice("Text copied.");
+      } catch {
+        setPane("edit");
+        setNotice("Use Ctrl+C in the paragraph editor to copy text.");
+      }
+      return;
+    }
+    if (name === "paste") {
+      try {
+        insertText(await navigator.clipboard.readText());
+      } catch {
+        editor.focus();
+        setNotice("Click the page and press Ctrl+V to paste.");
+      }
+    }
+  }
+  async function replaceText(
+    find: string,
+    value: string,
+    caseSensitive: boolean,
+    allMatches: boolean,
+  ) {
+    if (!find) return;
+    setQuery(find);
+    setReplacement(value);
+    setMatchCase(caseSensitive);
+    await editor.flush();
+    const commands: EditCommand[] = [],
+      active = activeSession.current;
+    let skipped = 0;
+    for (const p of paragraphs(active?.document ?? document)) {
+      const matches = literalMatches(paragraphText(p), find, caseSensitive);
+      if (!matches.length) continue;
+      if (!active?.capability(p.id!).text) {
+        skipped += matches.length;
+        continue;
+      }
+      const hits = allMatches ? matches : [matches[0]];
+      for (const hit of [...hits].reverse())
+        commands.push({ type: "text", id: p.id!, ...hit, text: value });
+      if (!allMatches) break;
+    }
+    const done = await executeMany(commands);
+    setNotice(
+      done
+        ? `${commands.length} replacement(s). ${skipped ? `${skipped} protected match(es) skipped.` : ""}`
+        : commands.length
+          ? "Replacement could not be completed."
+          : "No editable matches found.",
+    );
+  }
+  function capturePageSelection() {
+    if (!canvas.current) return;
+    const picked = selectionRanges(canvas.current, document);
+    setScope(picked.length > 1 ? picked : []);
+    editor.capture(true);
+    if (painter && picked.length) {
+      void executeMany(
+        picked.map((target) => ({
+          type: "run",
+          id: target.id,
+          format: painter,
+          start: target.start,
+          end:
+            target.end === target.start
+              ? all.find((p) => p.id === target.id)
+                ? paragraphText(all.find((p) => p.id === target.id)!).length
+                : target.end
+              : target.end,
+        })),
+      );
+      setPainter(null);
+    }
+  }
+  function fit(mode: "width" | "page") {
+    if (!canvas.current) return;
+    const w = ((document?.page?.widthPt ?? 595.3) * 4) / 3,
+      h = ((document?.page?.heightPt ?? 841.9) * 4) / 3;
+    setZoom(
+      Math.max(
+        0.25,
+        Math.min(
+          2,
+          (canvas.current.clientWidth - 80) / w,
+          mode === "page" ? (canvas.current.clientHeight - 55) / h : 2,
+        ),
+      ),
+    );
+  }
+  async function print() {
+    if (draftDirty && session)
+      await execute({
+        type: "text",
+        id: selectedId,
+        ...textChange(text, draft),
+      });
+    await window.document.fonts.ready;
+    setFileView(null);
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  }
 
   return (
-    <div className="workspace">
-      <header className="app-header">
-        <a href="/" className="brand" aria-label="Docs home">
-          <span className="document-icon" aria-hidden="true">
-            D
-          </span>
-          <span>
-            Docs<span className="brand-note">Your document workspace</span>
-          </span>
-        </a>
-        <div className="header-actions">
-          <button
-            className="button button-quiet"
-            disabled={busy}
-            onClick={() => void openSample()}
-          >
-            Try sample
-          </button>
-          <button
-            className="button button-primary"
-            disabled={busy}
-            onClick={() => fileInput.current?.click()}
-          >
-            <span aria-hidden="true">↑</span> Open DOCX
-          </button>
-          <input
-            ref={fileInput}
-            hidden
-            type="file"
-            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            aria-label="Open a DOCX file"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file)
-                void open(async () => {
-                  if (!/\.docx$/i.test(file.name))
-                    throw new Error('Please choose a .docx file.');
-                  if (file.size > MAX_FILE_BYTES)
-                    throw new Error('Please choose a file smaller than 50 MB.');
-                  return file.arrayBuffer();
-                }, file.name);
-              event.target.value = '';
-            }}
+    <div className="word-app">
+      <header className="titlebar">
+        <span className="app-mark">D</span>
+        <button
+          className="filename"
+          onClick={() => setModal("rename")}
+          title="Rename download"
+        >
+          <bdi>{filename}</bdi>
+          <Icon name="chevron" size={13} />
+        </button>
+        <span className="save-state">
+          <span className="state-dot" />
+          {busy
+            ? "Working…"
+            : draftDirty
+              ? "Text changes pending"
+              : unsaved
+                ? "Changes on this device"
+                : session?.dirty
+                  ? "DOCX downloaded"
+                  : "Stored on this device"}
+        </span>
+        <div className="quick-access">
+          <Tool
+            label="Download DOCX (Ctrl+S)"
+            icon="save"
+            onClick={() => void save()}
+            disabled={busy || !session}
+          />
+          <Tool
+            label="Undo (Ctrl+Z)"
+            icon="undo"
+            onClick={() => void history("undo")}
+            disabled={busy || (!session?.canUndo && !draftDirty)}
+          />
+          <Tool
+            label="Redo"
+            icon="redo"
+            onClick={() => void history("redo")}
+            disabled={busy || !session?.canRedo}
           />
         </div>
+        <button className="command-search" onClick={() => setPane("find")}>
+          <Icon name="search" size={16} />
+          <span>Find in document</span>
+          <kbd>Ctrl F</kbd>
+        </button>
+        <span className="local-badge">Local workspace</span>
       </header>
-
-      <main>
-        <div className="document-toolbar">
-          <div className="document-title">
-            <h1>{filename}</h1>
-            <span className="preview-badge">Preview</span>
-          </div>
-          <span className="local-note">
-            <span aria-hidden="true">●</span> Files stay on your device
-          </span>
+      <nav className="tabbar" aria-label="Document ribbon">
+        <button
+          className="file-tab"
+          aria-expanded={!!fileView}
+          onClick={() => setFileView("Home")}
+        >
+          File
+        </button>
+        <div role="tablist" aria-label="Ribbon tabs">
+          {(["Home", "Insert", "Layout"] as RibbonTab[]).map((name, index) => (
+            <button
+              id={`tab-${name}`}
+              key={name}
+              role="tab"
+              aria-selected={tab === name}
+              aria-controls={`ribbon-${name}`}
+              tabIndex={tab === name ? 0 : -1}
+              className={tab === name ? "selected-tab" : ""}
+              onClick={() => setTab(name)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                  e.preventDefault();
+                  const names: RibbonTab[] = ["Home", "Insert", "Layout"],
+                    next =
+                      names[(index + (e.key === "ArrowRight" ? 1 : 2)) % 3];
+                  setTab(next);
+                  window.document.getElementById(`tab-${next}`)?.focus();
+                }
+              }}
+            >
+              {name}
+            </button>
+          ))}
         </div>
-        <div className="support-note">
-          Preview includes tables, lists, images, inherited formatting and
-          RTL/LTR text in separate page sheets. Browser pagination and floating
-          layouts may differ from Word. Editing and saving DOCX are not
-          available yet.
+        <div className="tabbar-right">
+          <button onClick={() => setPane("fonts")}>
+            Fonts
+            {fonts.missing.length ? (
+              <span className="count-dot">{fonts.missing.length}</span>
+            ) : null}
+          </button>
+          <button onClick={() => setPane("compatibility")}>
+            Compatibility
+          </button>
         </div>
-        {missingFonts.length ? (
-          <div className="font-warning" role="status">
-            Some source fonts are missing. Load the matching files for an
-            accurate preview:{' '}
-            {missingFonts.map((font) => (
-              <button
-                type="button"
-                key={font.family}
-                onClick={() => {
-                  setFontFamily(font.family);
-                  if (fontPanel.current) fontPanel.current.open = true;
-                }}
-              >
-                {font.family} ({font.locations.join(', ')})
-              </button>
+      </nav>
+      {tab === "Home" ? (
+        <HomeRibbon
+          selected={selected}
+          format={activeRun()}
+          disabled={busy || !!session?.lockedReason}
+          canFormat={canFormat}
+          hasSelection={
+            scope.length > 0 || (!!range && range.end > range.start)
+          }
+          styles={styleList}
+          showMarks={showMarks}
+          painter={!!painter}
+          onRun={run}
+          onParagraph={para}
+          onAction={(name) => void action(name)}
+          onDialog={setHomeDialog}
+        />
+      ) : (
+        <Ribbon
+          tab={tab}
+          document={document}
+          selected={selected}
+          range={range}
+          disabled={busy || !!session?.lockedReason}
+          canFormat={canFormat}
+          canPage={!!session?.canSetPage}
+          families={fonts.required.map((f) => f.family)}
+          onRun={run}
+          onParagraph={para}
+          onAction={(name) => void action(name)}
+        />
+      )}
+      <div className="context-strip">
+        <span>
+          <span className="mode-dot" />
+          Document editing
+        </span>
+        <span>
+          {selected
+            ? `${range && range.end > range.start ? `${range.end - range.start} characters selected` : "Paragraph selected"} · ${selected.properties.direction?.toUpperCase() ?? "LTR"}`
+            : "Select a paragraph"}
+        </span>
+        <button onClick={() => setPane("edit")}>
+          Open paragraph editor ↗
+        </button>
+        {fonts.missing.length > 0 && (
+          <button className="missing-pill" onClick={() => setPane("fonts")}>
+            {fonts.missing.length} missing fonts
+          </button>
+        )}
+      </div>
+      {error && (
+        <div className="error-banner" role="alert">
+          <Icon name="info" size={17} />
+          <span>{error}</span>
+          <button aria-label="Dismiss error" onClick={() => setError("")}>
+            ×
+          </button>
+        </div>
+      )}
+      <div className="workspace-body">
+        <main
+          ref={canvas}
+          className={`page-workspace ${painter ? "format-painter-active" : ""}`}
+          aria-label="Document pages"
+          aria-busy={busy}
+          onMouseUp={capturePageSelection}
+        >
+          <div className="page-ruler" aria-hidden="true">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+              <span key={n}>{n}</span>
             ))}
           </div>
-        ) : null}
-        {document?.diagnostics?.length ? (
-          <details className="compatibility-notes">
-            <summary>
-              Document compatibility notes ({document.diagnostics.length})
-            </summary>
-            <ul>
-              {document.diagnostics.map((note, index) => (
-                <li key={index}>{note.message}</li>
-              ))}
-            </ul>
-          </details>
-        ) : null}
-
-        <details ref={fontPanel} className="font-settings">
-          <summary>
-            Custom fonts
-            {missingFonts.length ? ` · ${missingFonts.length} missing` : ''}
-          </summary>
-          {missingFonts.length ? (
-            <p className="missing-fonts" role="status">
-              These fonts are not available in this browser:{' '}
-              {missingFonts
-                .map((font) => `${font.family} (${font.locations.join(', ')})`)
-                .join('; ')}
-              . Load their font files below to replace the fallback fonts.
-            </p>
-          ) : null}
-          <div className="font-controls">
-            <div className="font-help">
-              <strong>Use your document’s font</strong>
-              <p>
-                {families.length
-                  ? `Font names in this document: ${families.join(', ')}.`
-                  : 'Enter the exact font family name used in your document.'}{' '}
-                Load a regular font face for this browser session.
-              </p>
-              <p>
-                On Windows, the Fonts view can hide files from upload pickers.
-                User-installed fonts are usually in{' '}
-                <code>%LOCALAPPDATA%\Microsoft\Windows\Fonts</code>. Paste the
-                font file’s full path into the picker’s File name box. Use the
-                family name, such as Pofak, without Word’s “(Body)” label.
-              </p>
+          {document ? (
+            <PaginatedDocument
+              document={document}
+              fontRevision={fonts.revision}
+              onPageCountChange={setPageCount}
+              zoom={zoom}
+              showFormattingMarks={showMarks}
+            />
+          ) : (
+            <div className="welcome-sheet">
+              <Icon name="document" size={48} />
+              <h1>Your next document starts here</h1>
+              <p>Open a Word file or start with a blank page.</p>
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={() =>
+                  void open(createBlankDocx(), "Untitled document.docx")
+                }
+              >
+                Create blank document
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => fileInput.current?.click()}
+              >
+                Open DOCX
+              </button>
             </div>
-            <label>
-              Font family name
-              <input
-                value={fontFamily}
-                onChange={(event) => setFontFamily(event.target.value)}
-                placeholder="e.g. B Nazanin"
-                list="document-fonts"
-              />
-              <datalist id="document-fonts">
-                {families.map((family) => (
-                  <option key={family} value={family} />
+          )}
+        </main>
+        {pane && (
+          <aside className="task-pane" aria-label={titles[pane]}>
+            <div className="pane-title">
+              <h2>{titles[pane]}</h2>
+              <button aria-label="Close pane" onClick={() => setPane(null)}>
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+            <div className="pane-content">
+              {pane === "fonts" && <FontPanel fonts={fonts} />}
+              {pane === "edit" &&
+                (selected ? (
+                  <>
+                    <p className="pane-description">
+                      Edit this paragraph here. Select text here or on the page
+                      to format a range. With no range, formatting applies to
+                      all its text.
+                    </p>
+                    {!canFormat && (
+                      <div className="pane-callout">{capability?.reason}</div>
+                    )}
+                    <label className="field">
+                      Paragraph text
+                      <textarea
+                        ref={textInput}
+                        dir={selected.properties.direction ?? "ltr"}
+                        className="paragraph-editor"
+                        value={draft}
+                        disabled={!canFormat || busy}
+                        onChange={(e) => {
+                          setDraft(e.target.value);
+                          setRange(null);
+                        }}
+                        onSelect={(e) =>
+                          setRange({
+                            start: e.currentTarget.selectionStart,
+                            end: e.currentTarget.selectionEnd,
+                          })
+                        }
+                      />
+                    </label>
+                    <div className="pane-actions">
+                      <button
+                        className="primary-button"
+                        disabled={!draftDirty || !canFormat || busy}
+                        onClick={() =>
+                          void execute({
+                            type: "text",
+                            id: selectedId,
+                            ...textChange(text, draft),
+                          })
+                        }
+                      >
+                        Apply text changes
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!draftDirty || busy}
+                        onClick={() => {
+                          setDraft(text);
+                          setRange(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <div className="selection-summary">
+                      {range && range.end > range.start
+                        ? `${range.end - range.start} selected characters`
+                        : "Formatting scope: whole paragraph"}
+                    </div>
+                  </>
+                ) : (
+                  <p>Select a paragraph on the page.</p>
                 ))}
-              </datalist>
-            </label>
-            <label>
-              Font file
-              <input
-                type="file"
-                accept=".ttf,.otf,.woff,.woff2"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void loadFont(file);
-                  event.target.value = '';
-                }}
-              />
-            </label>
-          </div>
-          {fontStatus && (
-            <p className="font-status" role="status">
-              {fontStatus}
-            </p>
-          )}
-        </details>
-
-        {error && (
-          <div className="error" role="alert">
-            <strong>Couldn’t open this document</strong>
-            <p>{error}</p>
-            <button
-              className="button button-quiet"
-              onClick={() => fileInput.current?.click()}
-            >
-              Choose another file
-            </button>
-          </div>
-        )}
-
-        <div className="document-canvas" aria-busy={busy}>
-          <article
-            className={`document-paper${document ? ' has-document' : ''}`}
-            dir="ltr"
-            aria-label="Document preview"
-          >
-            {busy ? (
-              <div className="empty-state" role="status">
-                <span className="loading-dot" />
-                Opening your document…
-              </div>
-            ) : document ? (
-              document.blocks.length ? (
-                <PaginatedDocument
-                  document={document}
-                  fontRevision={fontRevision}
-                  onPageCountChange={setPageCount}
-                />
-              ) : (
-                <div className="empty-state">
-                  <h2>No supported text found</h2>
-                  <p>
-                    This file may contain tables, images or other content the
-                    engine cannot display yet.
+              {(pane === "find" || pane === "replace") && (
+                <>
+                  <label className="field">
+                    Find
+                    <input
+                      autoFocus
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search document text"
+                    />
+                  </label>
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={matchCase}
+                      onChange={(e) => setMatchCase(e.target.checked)}
+                    />
+                    Match case
+                  </label>
+                  {pane === "replace" && (
+                    <>
+                      <label className="field">
+                        Replace with
+                        <input
+                          value={replacement}
+                          onChange={(e) => setReplacement(e.target.value)}
+                        />
+                      </label>
+                      <p className="pane-description">
+                        Choose a result, then replace its first match.
+                        Structured text stays locked.
+                      </p>
+                      <button
+                        className="primary-button"
+                        disabled={
+                          busy ||
+                          !query ||
+                          !canFormat ||
+                          draftDirty ||
+                          !(
+                            matchCase ? text : text.toLocaleLowerCase()
+                          ).includes(
+                            matchCase ? query : query.toLocaleLowerCase(),
+                          )
+                        }
+                        onClick={() => {
+                          const start = (
+                            matchCase ? text : text.toLocaleLowerCase()
+                          ).indexOf(
+                            matchCase ? query : query.toLocaleLowerCase(),
+                          );
+                          void execute({
+                            type: "text",
+                            id: selectedId,
+                            start,
+                            end: start + query.length,
+                            text: replacement,
+                          });
+                        }}
+                      >
+                        Replace in selected paragraph
+                      </button>
+                    </>
+                  )}
+                  <p className="result-count">
+                    {query
+                      ? `${results.length} matching paragraphs`
+                      : "Search body text, tables, headers and footers."}
                   </p>
-                </div>
-              )
-            ) : (
-              <div className="empty-state">
-                <h2>Open a document to get started</h2>
-                <p>Choose a DOCX file using the button above.</p>
-              </div>
-            )}
-          </article>
-          <footer className="document-footer">
-            <span>
-              {document
-                ? `${pageCount ? `${pageCount} pages · ` : ''}${paragraphs.length} paragraphs · ${runs.length} text runs`
-                : 'DOCX workspace'}
-            </span>
-            <a href="/sample.docx" download>
-              Download sample
-            </a>
-          </footer>
-          {document && (
-            <details className="structure">
-              <summary>Inspect document structure</summary>
-              <pre>{JSON.stringify(document, null, 2)}</pre>
-            </details>
-          )}
+                  <div className="search-results">
+                    {results.slice(0, 100).map((result, index) => (
+                      <button
+                        key={result.id}
+                        onClick={() => {
+                          jump(result.id);
+                          setRange({ start: result.start, end: result.end });
+                        }}
+                      >
+                        <small>Result {index + 1}</small>
+                        <span dir="auto">
+                          {result.content.slice(
+                            Math.max(0, result.start - 35),
+                            result.end + 90,
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {pane === "compatibility" && (
+                <>
+                  <div className="pane-callout">
+                    Source-retaining export keeps untouched package parts.
+                    Supported edits include simple paragraph text and
+                    formatting, paragraph properties, body paragraph/table
+                    insertion and single-section page setup.
+                  </div>
+                  <p className="pane-description">
+                    Structured text stays locked where it cannot be rewritten
+                    safely. Browser pagination can differ from Word. Export has
+                    automated round-trip checks; Word reopen fidelity is not yet
+                    certified.
+                  </p>
+                  {session?.lockedReason && <p>{session.lockedReason}</p>}
+                  <h3>Import notes</h3>
+                  {document?.diagnostics?.length ? (
+                    <ul className="diagnostic-list">
+                      {document.diagnostics.map((note, index) => (
+                        <li key={index}>{note.message}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>
+                      No import diagnostics. This does not certify full DOCX
+                      compatibility.
+                    </p>
+                  )}
+                  <details className="pane-help">
+                    <summary>Developer: document IR</summary>
+                    <pre>{JSON.stringify(document, null, 2)}</pre>
+                  </details>
+                </>
+              )}
+              {pane === "styles" && (
+                <>
+                  <p className="pane-description">
+                    Source style names are retained. Use direct formatting for
+                    edits; shared style-definition editing is not available yet.
+                  </p>
+                  {[
+                    ...new Set(
+                      all.map(
+                        (p) => p.properties.styleId ?? "Default paragraph",
+                      ),
+                    ),
+                  ].map((style) => (
+                    <button
+                      className="pane-style"
+                      key={style}
+                      onClick={() => {
+                        const p = all.find(
+                          (p) =>
+                            (p.properties.styleId ?? "Default paragraph") ===
+                            style,
+                        );
+                        if (p?.id) jump(p.id);
+                      }}
+                    >
+                      <span>AaBbCc</span>
+                      <b>{style}</b>
+                      <small>Find a paragraph using this style</small>
+                    </button>
+                  ))}
+                </>
+              )}
+              {pane === "outline" && (
+                <>
+                  <p className="pane-description">
+                    Body, table, header and footer paragraphs. Choose one to
+                    navigate or inspect.
+                  </p>
+                  <div className="outline-list">
+                    {all.map((p, index) => (
+                      <button
+                        key={p.id}
+                        className={selectedId === p.id ? "active" : ""}
+                        onClick={() => jump(p.id!)}
+                      >
+                        <small>
+                          {/header|footer/i.test(p.id ?? "")
+                            ? "Header / footer"
+                            : (p.properties.styleId ??
+                              `Paragraph ${index + 1}`)}
+                        </small>
+                        <span dir="auto">
+                          {paragraphText(p).slice(0, 90) || "(Empty paragraph)"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </aside>
+        )}
+      </div>
+      <footer className="statusbar">
+        <div>
+          <span>
+            Page {currentPage} of {pageCount || "…"}
+          </span>
+          <span>{words.toLocaleString()} words</span>
+          <span>
+            {selected?.properties.direction === "rtl"
+              ? "Right to left"
+              : "Left to right"}
+          </span>
         </div>
-      </main>
+        <span className="status-message" role="status">
+          {notice}
+        </span>
+        <div className="zoom-controls">
+          <button onClick={() => fit("page")} title="Fit page">
+            <Icon name="page" size={15} />
+          </button>
+          <button onClick={() => fit("width")}>Fit width</button>
+          <button
+            aria-label="Zoom out"
+            onClick={() => setZoom((z) => Math.max(0.25, z - 0.1))}
+          >
+            −
+          </button>
+          <input
+            aria-label="Zoom"
+            type="range"
+            min="25"
+            max="200"
+            step="5"
+            value={Math.round(zoom * 100)}
+            onChange={(e) => setZoom(Number(e.target.value) / 100)}
+          />
+          <button
+            aria-label="Zoom in"
+            onClick={() => setZoom((z) => Math.min(2, z + 0.1))}
+          >
+            +
+          </button>
+          <button onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
+        </div>
+      </footer>
+      <input
+        ref={fileInput}
+        hidden
+        aria-label="Open DOCX"
+        type="file"
+        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file && discardOK()) {
+            if (!/\.docx$/i.test(file.name)) {
+              setError("Choose a .docx file.");
+              return;
+            }
+            if (file.size > MAX_BYTES) {
+              setError("Choose a DOCX smaller than 50 MB.");
+              return;
+            }
+            await open(new Uint8Array(await file.arrayBuffer()), file.name);
+          }
+        }}
+      />
+      {fileView && (
+        <Backstage
+          view={fileView}
+          onView={setFileView}
+          filename={filename}
+          pageCount={pageCount}
+          words={words}
+          fontCount={fonts.required.length}
+          document={document}
+          busy={busy}
+          onNew={() => {
+            if (discardOK())
+              void open(createBlankDocx(), "Untitled document.docx");
+          }}
+          onSample={() => void sample()}
+          onOpen={() => fileInput.current?.click()}
+          onSave={() => void save()}
+          onOriginal={() => {
+            if (session)
+              download(
+                session.original(),
+                filename.replace(/\.docx$/i, "-original.docx"),
+              );
+          }}
+          onPrint={() => void print()}
+          onRename={() => setModal("rename")}
+          onPane={(value) => {
+            setFileView(null);
+            setPane(value);
+          }}
+        />
+      )}
+      <WorkspaceDialogs
+        modal={modal}
+        onClose={() => setModal(null)}
+        document={document}
+        selected={selected}
+        filename={filename}
+        onFilename={setFilename}
+        busy={busy}
+        canPage={!!session?.canSetPage}
+        execute={execute}
+      />
+      <HomeDialogs
+        dialog={homeDialog}
+        onClose={() => {
+          setHomeDialog(null);
+          setTimeout(() => editor.focus(), 0);
+        }}
+        onDialog={setHomeDialog}
+        selected={selected}
+        format={activeRun()}
+        families={fonts.required.map((font) => font.family)}
+        styles={styleList}
+        clipboard={clipboard}
+        query={query}
+        replacement={replacement}
+        onRun={run}
+        onParagraph={para}
+        onAction={(name) => void action(name)}
+        onText={insertText}
+        onCommand={(command) =>
+          void executeMany(
+            command.type === "list"
+              ? targets().map((target) => ({ ...command, id: target.id }))
+              : [command],
+          )
+        }
+        onFind={(value, caseSensitive) => {
+          setQuery(value);
+          setMatchCase(caseSensitive);
+          setHomeDialog(null);
+          setPane("find");
+        }}
+        onReplace={replaceText}
+        onSort={(count, descending, numeric) => {
+          const start = all.findIndex((p) => p.id === selectedId);
+          void execute({
+            type: "sort",
+            ids: all.slice(start, start + count).map((p) => p.id!),
+            descending,
+            numeric,
+            locale: document?.language,
+          });
+        }}
+      />
     </div>
   );
 }

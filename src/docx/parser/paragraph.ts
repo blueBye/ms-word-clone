@@ -139,7 +139,7 @@ export function parseParagraph(
       },
     };
   }
-  return {
+  const paragraph: Paragraph = {
     type: 'paragraph',
     properties,
     children,
@@ -150,4 +150,6 @@ export function parseParagraph(
         }
       : {}),
   };
+  context?.onParagraph?.(p, paragraph);
+  return paragraph;
 }

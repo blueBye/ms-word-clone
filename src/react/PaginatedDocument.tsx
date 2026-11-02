@@ -1,16 +1,16 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
-import type { DocumentIR } from '../model/document.js';
-import { DocumentRenderer } from './DocumentRenderer.js';
-import { measureBlocks, measureStoryInset } from './measurement.js';
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import type { DocumentIR } from "../model/document.js";
+import { DocumentRenderer } from "./DocumentRenderer.js";
+import { measureBlocks, measureStoryInset } from "./measurement.js";
 import {
   paginateBlocks,
   pageVariant,
   splitPageBreaks,
   type PageSlice,
-} from './pagination.js';
+} from "./pagination.js";
 
 export interface PaginatedDocumentProps {
   document: DocumentIR;
@@ -18,9 +18,12 @@ export interface PaginatedDocumentProps {
   /** Increment after registering a FontFace that was already loaded. */
   fontRevision?: number;
   onPageCountChange?: (count: number) => void;
+  /** View-only zoom; measurement remains at physical page size. */
+  zoom?: number;
+  showFormattingMarks?: boolean;
 }
 type Insets = Record<
-  'first' | 'default' | 'even',
+  "first" | "default" | "even",
   { top: number; bottom: number }
 >;
 interface Layout {
@@ -34,6 +37,8 @@ export function PaginatedDocument({
   className,
   fontRevision = 0,
   onPageCountChange,
+  zoom = 1,
+  showFormattingMarks = false,
 }: PaginatedDocumentProps) {
   const blocks = useMemo(() => splitPageBreaks(doc.blocks), [doc]);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -50,12 +55,12 @@ export function PaginatedDocument({
     function measure() {
       if (disposed) return;
       const body = container!.querySelector<HTMLElement>(
-        '[data-measure-body] [data-docx-body]',
+        "[data-measure-body] [data-docx-body]",
       );
       if (!body) return;
       const measurements = measureBlocks(body);
       const insets = {} as Insets;
-      for (const variant of ['first', 'default', 'even'] as const) {
+      for (const variant of ["first", "default", "even"] as const) {
         const stories = container!.querySelector(
           `[data-measure-story="${variant}"]`,
         );
@@ -64,11 +69,11 @@ export function PaginatedDocument({
         insets[variant] = {
           top: Math.max(
             margins?.top ?? 72,
-            measureStoryInset(header, 'header'),
+            measureStoryInset(header, "header"),
           ),
           bottom: Math.max(
             margins?.bottom ?? 72,
-            measureStoryInset(footer, 'footer'),
+            measureStoryInset(footer, "footer"),
           ),
         };
       }
@@ -87,29 +92,31 @@ export function PaginatedDocument({
     const observer = new ResizeObserver(schedule);
     observer.observe(container);
     const body = container.querySelector(
-      '[data-measure-body] [data-docx-body]',
+      "[data-measure-body] [data-docx-body]",
     );
     if (body) observer.observe(body);
     window.document.fonts.ready.then(() => {
       if (!disposed) schedule();
     });
-    window.document.fonts.addEventListener('loadingdone', schedule);
-    window.addEventListener('resize', schedule);
+    window.document.fonts.addEventListener("loadingdone", schedule);
+    window.addEventListener("resize", schedule);
     return () => {
       disposed = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
-      window.document.fonts.removeEventListener('loadingdone', schedule);
-      window.removeEventListener('resize', schedule);
+      window.document.fonts.removeEventListener("loadingdone", schedule);
+      window.removeEventListener("resize", schedule);
     };
   }, [doc, blocks, fontRevision, height, margins]);
 
-  const current = layout?.source === doc ? layout : null;
+  // Keep the previous sheets during measurement; the editing adapter restores
+  // its caret after the new source revision has finished laying out.
+  const current = layout;
   useEffect(() => {
     if (current) onPageCountChange?.(current.pages.length);
   }, [current, onPageCountChange]);
   const storyDocument = (
-    variant: 'first' | 'default' | 'even',
+    variant: "first" | "default" | "even",
   ): DocumentIR => ({
     ...doc,
     blocks: [],
@@ -118,35 +125,36 @@ export function PaginatedDocument({
     footers: { default: doc.footers?.[variant] },
   });
   const sheetStyle: CSSProperties = {
-    boxSizing: 'content-box',
+    boxSizing: "content-box",
     width: `${width}pt`,
-    boxShadow: '0 2px 12px #243c2c1a',
-    border: '1px solid #d7ded9',
-    background: doc.backgroundColor ?? '#fff',
-    overflow: 'hidden',
+    boxShadow: "0 2px 12px #243c2c1a",
+    border: "1px solid #d7ded9",
+    background: doc.backgroundColor ?? "#fff",
+    overflow: "hidden",
   };
   return (
     <div
       className={className}
       data-docx-pages=""
-      style={{ position: 'relative' }}
+      data-layout-pending={layout?.source !== doc ? "true" : undefined}
+      style={{ position: "relative" }}
     >
       <div
         ref={measureRef}
         aria-hidden="true"
         style={{
-          position: 'absolute',
-          left: '-100000px',
+          position: "absolute",
+          left: "-100000px",
           top: 0,
           width: `${width}pt`,
-          visibility: 'hidden',
-          pointerEvents: 'none',
+          visibility: "hidden",
+          pointerEvents: "none",
         }}
       >
         <div data-measure-body="">
           <DocumentRenderer document={{ ...doc, blocks }} pageLayout />
         </div>
-        {(['first', 'default', 'even'] as const).map((variant) => (
+        {(["first", "default", "even"] as const).map((variant) => (
           <div key={variant} data-measure-story={variant}>
             <DocumentRenderer document={storyDocument(variant)} pageLayout />
           </div>
@@ -158,8 +166,8 @@ export function PaginatedDocument({
           style={{
             ...sheetStyle,
             minHeight: `${height}pt`,
-            padding: '60px',
-            color: '#718178',
+            padding: "60px",
+            color: "#718178",
           }}
         >
           Laying out document pages…
@@ -172,7 +180,7 @@ export function PaginatedDocument({
             key={index}
             aria-label={`Page ${index + 1}`}
             data-docx-page={index + 1}
-            style={{ width: 'fit-content', margin: '0 auto 28px' }}
+            style={{ width: "fit-content", margin: "0 auto 28px", zoom }}
           >
             <div style={sheetStyle}>
               <DocumentRenderer
@@ -182,19 +190,20 @@ export function PaginatedDocument({
                 pageCount={current.pages.length}
                 contentTopPt={inset.top}
                 contentBottomPt={inset.bottom}
+                showFormattingMarks={showFormattingMarks}
               />
             </div>
             <div
               style={{
-                fontFamily: 'Segoe UI, Arial, sans-serif',
-                fontSize: '11px',
-                color: '#77877d',
-                textAlign: 'center',
-                marginTop: '9px',
+                fontFamily: "Segoe UI, Arial, sans-serif",
+                fontSize: "11px",
+                color: "#77877d",
+                textAlign: "center",
+                marginTop: "9px",
               }}
             >
               Page {index + 1} of {current.pages.length}
-              {page.overflow ? ' · Oversize content kept together' : ''}
+              {page.overflow ? " · Oversize content kept together" : ""}
             </div>
           </section>
         );

@@ -29,6 +29,9 @@ import { Styles, parseTheme } from './styles.js';
 import { Numbering } from './numbering.js';
 import { colorValue } from './parser/properties.js';
 import type { ParseContext } from './parser/context.js';
+import type { Element } from '@xmldom/xmldom';
+import type { Paragraph } from '../model/document.js';
+import type { DocxPackage } from './package.js';
 
 /** Import to preview IR; source packages are not yet round-trippable. */
 export async function importDocx(
@@ -36,6 +39,14 @@ export async function importDocx(
   options: ImportOptions = {},
 ): Promise<DocumentIR> {
   const pkg = await openDocxPackage(input, options);
+  return parseDocxPackage(pkg);
+}
+
+/** Shared parser for a source-retaining session; not an application-specific API. */
+export async function parseDocxPackage(
+  pkg: DocxPackage,
+  onParagraph?: (part: string, source: Element, paragraph: Paragraph) => void,
+): Promise<DocumentIR> {
   const path = await findMainDocumentPart(pkg);
   const relationships = await readRelationships(pkg, path);
   const relatedXml = async (type: string) => {
@@ -115,6 +126,7 @@ export async function importDocx(
       assets,
       warn: warning(part),
       numberingLanguage: sourceLanguage,
+      onParagraph: onParagraph && ((source, paragraph) => onParagraph(part, source, paragraph)),
     };
   }
   const ctx = await context(path, relationships);

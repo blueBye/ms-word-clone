@@ -72,6 +72,8 @@ export interface ParagraphProperties {
 }
 export interface Paragraph {
   type: 'paragraph';
+  /** Source location in the current editing session revision; absent in preview-only imports. */
+  id?: string;
   properties: ParagraphProperties;
   directProperties?: ParagraphProperties;
   markProperties?: RunProperties;
