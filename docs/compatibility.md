@@ -1,6 +1,6 @@
 # DOCX compatibility matrix
 
-Baseline: 2026-10-31, updated after the four-document compatibility pass. “Partial” means there are known lossy or approximate behaviors. “No” means absent, not merely untested. Editing/export and unknown-source preservation remain absent. See [sample results](sample-compatibility.md) for measured evidence and remaining limits.
+Baseline: 2026-10-31, updated after the four-document compatibility pass. “Partial” means there are known lossy or approximate behaviors. “No” means absent, not merely untested. The table below is the original parser/preview baseline. Editing/export and preservation have since been introduced for a bounded subset; see [current Home editing status](home-editor-status.md). See [sample results](sample-compatibility.md) for measured evidence and remaining limits.
 
 | Feature | Import / IR now | Preview now | Target milestone |
 | --- | --- | --- | --- |

@@ -1,6 +1,6 @@
 # DOCX engine and Next.js workspace
 
-A browser-compatible TypeScript DOCX importer, portable document IR, and React preview renderer, with a Next.js host application. It now includes table-based documents, inherited formatting and RTL/LTR typography. DOCX editing and export are not implemented.
+A browser-compatible TypeScript DOCX importer, portable document IR, and React preview renderer, with a Next.js host application. It includes table-based documents, inherited formatting, RTL/LTR typography, direct paragraph editing, and a source-retaining DOCX editing session. Editing is restricted to supported content; this is not full Word compatibility.
 
 ## Run the Next.js app
 
@@ -9,30 +9,30 @@ pnpm install
 pnpm dev
 ```
 
-Open **http://127.0.0.1:3000** and click **Open DOCX**. An English/Persian/Arabic sample opens automatically so there is something to see immediately. **Custom fonts** lets you load a regular font face using the exact family name from your document. Documents are parsed locally in your browser.
+Open **http://127.0.0.1:3000** and use **File → Open**. An English/Persian/Arabic sample opens automatically so there is something to see immediately. **Fonts** lets you load a regular font face using the exact family name from your document. Documents are parsed locally in your browser.
 
 The preview supports tables, merged cells, lists, inherited styles, image opacity, page backgrounds and document margins. The Next.js viewer measures content into separate sheets, repeats first/default/even headers and footers, and reflows after fonts load. Floating drawings and Word's exact pagination remain approximate; indivisible content taller than a page is retained with an oversize notice.
 
 `pnpm dev` builds the engine and starts Next.js. Keep the terminal running while using the app; press Ctrl+C to stop it. Node.js 20.9 or newer is required.
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Start Next.js at http://127.0.0.1:3000 |
-| `pnpm build` | Build the engine and the Next.js app for production |
-| `pnpm start` | Start the production app after building |
-| `pnpm build:engine` | Build only the extractable engine into `dist/` |
-| `pnpm typecheck` | Check the engine and app types |
-| `pnpm test` | Run engine and sample-integration tests |
+| Command             | Purpose                                             |
+| ------------------- | --------------------------------------------------- |
+| `pnpm dev`          | Start Next.js at http://127.0.0.1:3000              |
+| `pnpm build`        | Build the engine and the Next.js app for production |
+| `pnpm start`        | Start the production app after building             |
+| `pnpm build:engine` | Build only the extractable engine into `dist/`      |
+| `pnpm typecheck`    | Check the engine and app types                      |
+| `pnpm test`         | Run engine and sample-integration tests             |
 
 The application lives in `apps/web/`; the engine remains in `src/`. The app imports `@local/docx-ir-engine` and `@local/docx-ir-engine/react` through a workspace dependency, without reaching into private source files. Rebuild with `pnpm build:engine` after changing engine source while the app is running. Regenerate the sample using `node scripts/create-sample.mjs`.
 
 ## Review and roadmap
 
-The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. Start with its first implementation batch for the next UI work.
+The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. The [Home implementation status](docs/home-editor-status.md) records the current working controls and remaining gaps.
 
 The [engine review](docs/engine-review.md) covers the parser, document IR, RTL/LTR typography and remaining compatibility risks. The [feature matrix](docs/compatibility.md) records current support, and the [development plan](docs/development-plan.md) defines staged engine work followed by the Next.js editor.
 
-The build now uses the xmldom 0.9 callback API and DOM types. Synthetic/component and sample-integration checks cover the current subset; real Word interoperability, browser typography and export remain future validation work.
+The build now uses the xmldom 0.9 callback API and DOM types. Synthetic/component and sample-integration checks cover the supported editing subset and package round trips. Word interoperability and browser typography still need a broader real-document corpus.
 
 ## Drop into your Next.js/React project
 
@@ -43,24 +43,34 @@ The build now uses the xmldom 0.9 callback API and DOM types. Synthetic/componen
 The ZIP includes TypeScript source but not `node_modules`. Build dependencies: `fflate`, `@xmldom/xmldom`; peer dependency: `react >=18`.
 
 ```tsx
-'use client';
-import { useState } from 'react';
-import { importDocx, type DocumentIR } from '@local/docx-ir-engine';
-import { DocumentRenderer } from '@local/docx-ir-engine/react';
+"use client";
+import { useState } from "react";
+import { importDocx, type DocumentIR } from "@local/docx-ir-engine";
+import { DocumentRenderer } from "@local/docx-ir-engine/react";
 
 export default function DocxPreview() {
   const [doc, setDoc] = useState<DocumentIR | null>(null);
   const [error, setError] = useState<string | null>(null);
-  return <div>
-    <input type="file" accept=".docx" onChange={async event => {
-      const file = event.currentTarget.files?.[0];
-      if (!file) return;
-      try { setError(null); setDoc(await importDocx(await file.arrayBuffer())); }
-      catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    }} />
-    {error && <p role="alert">{error}</p>}
-    {doc && <DocumentRenderer document={doc} pageLayout />}
-  </div>;
+  return (
+    <div>
+      <input
+        type="file"
+        accept=".docx"
+        onChange={async (event) => {
+          const file = event.currentTarget.files?.[0];
+          if (!file) return;
+          try {
+            setError(null);
+            setDoc(await importDocx(await file.arrayBuffer()));
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      />
+      {error && <p role="alert">{error}</p>}
+      {doc && <DocumentRenderer document={doc} pageLayout />}
+    </div>
+  );
 }
 ```
 

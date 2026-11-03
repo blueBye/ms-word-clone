@@ -5,6 +5,7 @@ import {
   openDocxSession,
   createBlankDocx,
   type DocxSession,
+  type DocxStyle,
   type DocumentIR,
   type EditCommand,
   type ParagraphFormat,
@@ -29,6 +30,7 @@ import { Backstage } from "./editor/Backstage";
 import { usePageEditor, type PageSelection } from "./editor/usePageEditor";
 import { HomeRibbon } from "./editor/HomeRibbon";
 import { HomeDialogs } from "./editor/HomeDialogs";
+import type { MenuAnchor } from "./editor/HomeMenu";
 
 type Pane =
   | "find"
@@ -78,8 +80,24 @@ export function DocxWorkspace() {
     [downloaded, setDownloaded] = useState(-1);
   const [showMarks, setShowMarks] = useState(false),
     [painter, setPainter] = useState<RunFormat | null>(null);
+  const [repeatFormat, setRepeatFormat] = useState<RunFormat>({
+    underline: "single",
+    highlight: "yellow",
+    color: "#c42b1c",
+  });
   const [homeDialog, setHomeDialog] = useState<string | null>(null),
-    [styleList, setStyleList] = useState<{ id: string; name: string }[]>([]);
+    [styleList, setStyleList] = useState<DocxStyle[]>([]);
+  const [homeAnchor, setHomeAnchor] = useState<MenuAnchor | null>(null),
+    [contextStyle, setContextStyle] = useState("");
+  const openHome = (name: string, anchor?: MenuAnchor) => {
+    if (anchor) setHomeAnchor(anchor);
+    setHomeDialog(name);
+  };
+  const lastList = useRef<
+    Partial<
+      Record<"bullet" | "decimal", Extract<EditCommand, { type: "list" }>>
+    >
+  >({});
   const [clipboard, setClipboard] = useState<string[]>([]),
     [scope, setScope] = useState<PageSelection[]>([]);
   const fileInput = useRef<HTMLInputElement>(null),
@@ -551,6 +569,16 @@ export function DocxWorkspace() {
           : [];
   }
   function run(format: RunFormat) {
+    setRepeatFormat((previous) => ({
+      ...previous,
+      ...(format.underline && format.underline !== "none"
+        ? { underline: format.underline }
+        : {}),
+      ...(format.highlight !== undefined
+        ? { highlight: format.highlight }
+        : {}),
+      ...(format.color !== undefined ? { color: format.color } : {}),
+    }));
     const picked = editor.getSelection();
     if (!scope.length && picked && picked.start === picked.end) {
       editor.setTyping({ ...editor.typingFormat, ...format });
@@ -589,6 +617,117 @@ export function DocxWorkspace() {
   ) {
     void execute({ type: "page", widthPt, heightPt, margins });
   }
+  function homeCommand(command: EditCommand) {
+    if (command.type !== "list") {
+      void execute(command);
+      return;
+    }
+    if (
+      command.kind !== "none" &&
+      !command.preserveDefinition &&
+      !command.restart &&
+      command.start === undefined &&
+      !command.continue
+    )
+      lastList.current[command.kind === "bullet" ? "bullet" : "decimal"] = {
+        ...command,
+      };
+    const chosen = targets(),
+      picked = editor.getSelection();
+    let ids = chosen.map((t) => t.id);
+    const instance = selected?.properties.numbering?.id;
+    if (
+      !scope.length &&
+      picked?.start === picked?.end &&
+      instance &&
+      instance !== "0" &&
+      command.kind !== "none" &&
+      !command.preserveDefinition
+    ) {
+      // A library choice restyles the current list; restart/value affects the tail only.
+      let list = all.filter((p) => p.properties.numbering?.id === instance);
+      if (command.restart || command.start !== undefined || command.continue)
+        list = list.slice(
+          Math.max(
+            0,
+            list.findIndex((p) => p.id === selectedId),
+          ),
+        );
+      ids = list.map((p) => p.id!);
+    }
+    void executeMany(
+      ids.map((id, index) => ({
+        ...command,
+        id,
+        level:
+          command.level ??
+          all.find((p) => p.id === id)?.properties.numbering?.level ??
+          0,
+        ...(index > 0
+          ? {
+              restart: false,
+              start: undefined,
+              continue:
+                command.restart ||
+                command.start !== undefined ||
+                command.continue,
+            }
+          : {}),
+      })),
+    );
+  }
+  async function styleAction(name: string, id: string) {
+    if (name === "update") {
+      const p = selected?.properties;
+      const current = activeRun();
+      await execute({
+        type: "style",
+        styleId: id,
+        run: {
+          ...current,
+          bold: !!current.bold,
+          italic: !!current.italic,
+          strike: !!current.strike,
+          caps: !!current.caps,
+          smallCaps: !!current.smallCaps,
+          underline: current.underline ?? "none",
+          hidden: !!current.hidden,
+          fontFamily: current.fontFamily ?? "Calibri",
+          fontSizePt: current.fontSizePt ?? 12,
+          color: current.color ?? "auto",
+          letterSpacingPt: current.letterSpacingPt ?? 0,
+          positionPt: current.positionPt ?? 0,
+          textOutline: current.textOutline ?? null,
+          textShadow: current.textShadow ?? null,
+          glow: current.glow ?? null,
+          reflection: current.reflection ?? null,
+        },
+        paragraph: p
+          ? {
+              alignment: p.alignment as ParagraphFormat["alignment"],
+              direction: p.direction,
+              spaceBeforePt: p.spaceBeforePt ?? 0,
+              spaceAfterPt: p.spaceAfterPt ?? 0,
+              indentStartPt: p.indentStartPt ?? p.indentLeftPt ?? 0,
+              indentEndPt: p.indentEndPt ?? p.indentRightPt ?? 0,
+              firstLinePt: p.firstLinePt ?? 0,
+              keepNext: p.keepNext ?? false,
+              keepLines: p.keepLines ?? false,
+              ...(p.lineSpacing?.rule === "auto"
+                ? { lineSpacing: p.lineSpacing.value }
+                : {}),
+            }
+          : undefined,
+      });
+    } else if (name === "select") {
+      const ranges = all
+        .filter((p) => (p.properties.styleId ?? "Normal") === id)
+        .map((p) => ({ id: p.id!, start: 0, end: paragraphText(p).length }));
+      setScope(ranges);
+      setNotice(`${ranges.length} paragraphs selected with this style.`);
+    } else if (name === "remove")
+      await execute({ type: "style", styleId: id, gallery: false });
+  }
   async function action(name: string) {
     if (name === "marks") {
       setShowMarks((value) => !value);
@@ -605,9 +744,25 @@ export function DocxWorkspace() {
     }
     if (name.startsWith("list:")) {
       const kind = name.slice(5) as "bullet" | "decimal";
-      void executeMany(
-        targets().map((target) => ({ type: "list", id: target.id, kind })),
-      );
+      const same = targets().every((t) => {
+        const p = all.find((p) => p.id === t.id);
+        return kind === "bullet"
+          ? p?.properties.list?.format === "bullet"
+          : !!p?.properties.list && p.properties.list.format !== "bullet";
+      });
+      const remembered = lastList.current[kind];
+      homeCommand({
+        type: "list",
+        id: selectedId,
+        kind: same ? "none" : (remembered?.kind ?? kind),
+        ...(!same && remembered
+          ? {
+              bullet: remembered.bullet,
+              pattern: remembered.pattern,
+              multilevel: remembered.multilevel,
+            }
+          : {}),
+      });
       return;
     }
     if (name.startsWith("level:")) {
@@ -633,6 +788,7 @@ export function DocxWorkspace() {
           id: target.id,
           kind,
           level,
+          preserveDefinition: true,
         })),
       );
       return;
@@ -986,18 +1142,23 @@ export function DocxWorkspace() {
         <HomeRibbon
           selected={selected}
           format={activeRun()}
+          repeat={repeatFormat}
           disabled={busy || !!session?.lockedReason}
           canFormat={canFormat}
           hasSelection={
             scope.length > 0 || (!!range && range.end > range.start)
           }
           styles={styleList}
+          onStyleContext={(id, anchor) => {
+            setContextStyle(id);
+            openHome("styleContext", anchor);
+          }}
           showMarks={showMarks}
           painter={!!painter}
           onRun={run}
           onParagraph={para}
           onAction={(name) => void action(name)}
-          onDialog={setHomeDialog}
+          onDialog={openHome}
         />
       ) : (
         <Ribbon
@@ -1458,12 +1619,19 @@ export function DocxWorkspace() {
         execute={execute}
       />
       <HomeDialogs
+        anchor={homeAnchor}
+        contextStyle={contextStyle}
+        onStyleContext={(id, anchor) => {
+          setContextStyle(id);
+          openHome("styleContext", anchor);
+        }}
+        onStyleAction={(name, id) => void styleAction(name, id)}
         dialog={homeDialog}
         onClose={() => {
           setHomeDialog(null);
           setTimeout(() => editor.focus(), 0);
         }}
-        onDialog={setHomeDialog}
+        onDialog={openHome}
         selected={selected}
         format={activeRun()}
         families={fonts.required.map((font) => font.family)}
@@ -1475,13 +1643,7 @@ export function DocxWorkspace() {
         onParagraph={para}
         onAction={(name) => void action(name)}
         onText={insertText}
-        onCommand={(command) =>
-          void executeMany(
-            command.type === "list"
-              ? targets().map((target) => ({ ...command, id: target.id }))
-              : [command],
-          )
-        }
+        onCommand={homeCommand}
         onFind={(value, caseSensitive) => {
           setQuery(value);
           setMatchCase(caseSensitive);

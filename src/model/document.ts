@@ -1,6 +1,6 @@
 /** Portable preview IR. Measurements are points unless a unit is explicit. */
 export interface DocumentIR {
-  type: 'document';
+  type: "document";
   schemaVersion: 2;
   blocks: Block[];
   page?: PageLayout;
@@ -16,13 +16,13 @@ export interface DocumentDiagnostic {
   part?: string;
 }
 export type StoryVariants = Partial<
-  Record<'first' | 'default' | 'even', Block[]>
+  Record<"first" | "default" | "even", Block[]>
 >;
 export interface PageLayout {
   widthPt?: number;
   heightPt?: number;
   margins?: Partial<
-    Record<'top' | 'right' | 'bottom' | 'left' | 'header' | 'footer', number>
+    Record<"top" | "right" | "bottom" | "left" | "header" | "footer", number>
   >;
   differentFirstPage?: boolean;
   evenAndOddHeaders?: boolean;
@@ -30,9 +30,14 @@ export interface PageLayout {
 }
 export type Block = Paragraph | Table;
 export type Inline = TextRun | BreakInline | DrawingInline;
-export type TextDirection = 'ltr' | 'rtl';
+export type TextDirection = "ltr" | "rtl";
 export type ParagraphAlignment =
-  'left' | 'right' | 'center' | 'justify' | 'start' | 'end';
+  | "left"
+  | "right"
+  | "center"
+  | "justify"
+  | "start"
+  | "end";
 export interface Border {
   style: string;
   widthPt: number;
@@ -40,7 +45,7 @@ export interface Border {
   spacePt?: number;
 }
 export type Borders = Partial<
-  Record<'top' | 'right' | 'bottom' | 'left' | 'insideH' | 'insideV', Border>
+  Record<"top" | "right" | "bottom" | "left" | "insideH" | "insideV", Border>
 >;
 export interface ParagraphProperties {
   styleId?: string;
@@ -48,7 +53,7 @@ export interface ParagraphProperties {
   direction?: TextDirection;
   spaceBeforePt?: number;
   spaceAfterPt?: number;
-  lineSpacing?: { value: number; rule: 'auto' | 'exact' | 'atLeast' };
+  lineSpacing?: { value: number; rule: "auto" | "exact" | "atLeast" };
   indentLeftPt?: number;
   indentRightPt?: number;
   indentStartPt?: number;
@@ -71,7 +76,7 @@ export interface ParagraphProperties {
   };
 }
 export interface Paragraph {
-  type: 'paragraph';
+  type: "paragraph";
   /** Source location in the current editing session revision; absent in preview-only imports. */
   id?: string;
   properties: ParagraphProperties;
@@ -86,6 +91,20 @@ export interface ComplexScriptProperties {
   italic?: boolean;
 }
 export interface RunProperties {
+  textOutline?: { color: string; widthPt: number } | null;
+  textShadow?: {
+    color: string;
+    blurPt: number;
+    distancePt: number;
+    angle: number;
+    opacity: number;
+  } | null;
+  glow?: { color: string; radiusPt: number; opacity: number } | null;
+  reflection?: { distancePt: number; opacity: number; size: number } | null;
+  ligatures?: string;
+  numberForm?: "default" | "lining" | "oldStyle";
+  numberSpacing?: "default" | "proportional" | "tabular";
+  stylisticSets?: number[];
   styleId?: string;
   direction?: TextDirection;
   fontFamily?: string;
@@ -102,7 +121,7 @@ export interface RunProperties {
   backgroundColor?: string;
   underline?: string;
   strike?: boolean;
-  verticalAlign?: 'baseline' | 'superscript' | 'subscript';
+  verticalAlign?: "baseline" | "superscript" | "subscript";
   positionPt?: number;
   letterSpacingPt?: number;
   caps?: boolean;
@@ -110,16 +129,16 @@ export interface RunProperties {
   hidden?: boolean;
 }
 export interface TextRun {
-  type: 'text';
+  type: "text";
   text: string;
   properties: RunProperties;
   directProperties?: RunProperties;
   href?: string;
-  field?: 'page' | 'pages';
+  field?: "page" | "pages";
 }
 export interface BreakInline {
-  type: 'break';
-  kind: 'page' | 'column';
+  type: "break";
+  kind: "page" | "column";
   properties: RunProperties;
 }
 export interface DrawingPosition {
@@ -128,14 +147,14 @@ export interface DrawingPosition {
   alignment?: string;
 }
 export interface DrawingInline {
-  type: 'drawing';
+  type: "drawing";
   widthPt: number;
   heightPt: number;
   alt: string;
   image?: {
     dataUrl: string;
     opacity?: number;
-    crop?: Partial<Record<'left' | 'top' | 'right' | 'bottom', number>>;
+    crop?: Partial<Record<"left" | "top" | "right" | "bottom", number>>;
   };
   shape?: {
     kind: string;
@@ -154,16 +173,16 @@ export interface DrawingInline {
   };
 }
 export interface Table {
-  type: 'table';
+  type: "table";
   properties: {
     styleId?: string;
     direction?: TextDirection;
-    width?: { value: number; unit: 'pt' | 'percent' };
-    alignment?: 'left' | 'right' | 'center';
+    width?: { value: number; unit: "pt" | "percent" };
+    alignment?: "left" | "right" | "center";
     indentPt?: number;
-    layout?: 'fixed' | 'autofit';
+    layout?: "fixed" | "autofit";
     borders?: Borders;
-    cellMargins?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
+    cellMargins?: Partial<Record<"top" | "right" | "bottom" | "left", number>>;
     backgroundColor?: string;
   };
   columnsPt: number[];
@@ -182,9 +201,9 @@ export interface TableCell {
   columnSpan: number;
   rowSpan: number;
   continuation?: boolean;
-  width?: { value: number; unit: 'pt' | 'percent' };
+  width?: { value: number; unit: "pt" | "percent" };
   borders?: Borders;
-  margins?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
+  margins?: Partial<Record<"top" | "right" | "bottom" | "left", number>>;
   backgroundColor?: string;
   verticalAlign?: string;
 }

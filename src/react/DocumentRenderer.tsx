@@ -1,4 +1,5 @@
 import React from "react";
+import { textEffectsStyle } from "./text-effects.js";
 import type { CSSProperties, ReactNode } from "react";
 import { getParagraphs, getTextRuns } from "../model/traversal.js";
 import { localizeDigits } from "../model/numerals.js";
@@ -47,13 +48,11 @@ function runStyle(p: RunProperties, script: Script): CSSProperties {
   const size = cs?.fontSizePt ?? p.fontSizePt;
   const bold = complex ? (cs?.bold ?? false) : (p.bold ?? false);
   const italic = complex ? (cs?.italic ?? false) : (p.italic ?? false);
-  const decoration = [
-    p.underline && p.underline !== "none" ? "underline" : "",
-    p.strike ? "line-through" : "",
-  ]
+  const decoration = [p.underline && p.underline !== "none" ? "underline" : ""]
     .filter(Boolean)
     .join(" ");
   return {
+    ...textEffectsStyle(p),
     fontFamily: fontFamily(
       complex
         ? (cs?.fontFamily ?? p.fontFamily)
@@ -70,13 +69,14 @@ function runStyle(p: RunProperties, script: Script): CSSProperties {
     textDecorationStyle:
       p.underline === "double"
         ? "double"
-        : p.underline?.includes("dash")
+        : /dash/i.test(p.underline ?? "")
           ? "dashed"
           : p.underline === "dotted"
             ? "dotted"
             : p.underline === "wave"
               ? "wavy"
               : undefined,
+    textDecorationThickness: p.underline === "thick" ? "2px" : undefined,
     verticalAlign:
       p.verticalAlign === "superscript"
         ? "super"
@@ -90,7 +90,7 @@ function runStyle(p: RunProperties, script: Script): CSSProperties {
       p.letterSpacingPt === undefined ? undefined : `${p.letterSpacingPt}pt`,
     textTransform: p.caps ? "uppercase" : undefined,
     fontVariantCaps: p.smallCaps ? "small-caps" : undefined,
-    display: p.hidden ? "none" : undefined,
+    display: p.hidden ? "none" : p.reflection ? "inline-block" : undefined,
     whiteSpace: "pre-wrap",
   };
 }
@@ -382,7 +382,13 @@ function renderInline(
         }
         style={textStyle(inline.properties, pieces[0].script, text)}
       >
-        {markedText(text, context)}
+        {inline.properties.strike ? (
+          <span style={{ textDecoration: "line-through solid" }}>
+            {markedText(text, context)}
+          </span>
+        ) : (
+          markedText(text, context)
+        )}
       </span>
     ) : (
       <span style={{ whiteSpace: "pre-wrap" }}>
@@ -396,7 +402,13 @@ function renderInline(
             }
             style={textStyle(inline.properties, piece.script, piece.text)}
           >
-            {markedText(piece.text, context)}
+            {inline.properties.strike ? (
+              <span style={{ textDecoration: "line-through solid" }}>
+                {markedText(piece.text, context)}
+              </span>
+            ) : (
+              markedText(piece.text, context)
+            )}
           </span>
         ))}
       </span>

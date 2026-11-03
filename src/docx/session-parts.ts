@@ -1,6 +1,12 @@
 import { XMLSerializer, type Element } from "@xmldom/xmldom";
 import type { DocxPackage } from "./package.js";
-import type { EditCommand } from "./session.js";
+import type {
+  EditCommand,
+  DocxStyle,
+  RunFormat,
+  ParagraphFormat,
+} from "./session.js";
+import { Styles, parseTheme } from "./styles.js";
 import { readRelationships } from "./relationships.js";
 import {
   childElements,
@@ -144,26 +150,197 @@ const builtins: Record<
 export async function readStyles(pkg: DocxPackage, main: string) {
   const rels = await readRelationships(pkg, main),
     found = [...rels.values()].find((r) => r.type === "styles" && !r.external);
-  const result = new Map(
+  const themePart = [...rels.values()].find(
+    (r) => r.type === "theme" && !r.external,
+  );
+  const theme = parseTheme(
+    themePart && pkg.hasPart(themePart.target)
+      ? parseXml(await pkg.readText(themePart.target)).documentElement!
+      : undefined,
+  );
+  const result = new Map<string, DocxStyle>(
     Object.entries(builtins).map(([id, style]) => [
       id,
-      { id, name: style.name },
+      {
+        id,
+        name: style.name,
+        gallery: true,
+        run: { fontSizePt: style.size, bold: !!style.bold },
+        paragraph: {
+          spaceBeforePt: style.before ?? 0,
+          spaceAfterPt: style.after ?? 0,
+        },
+      },
     ]),
   );
   if (found && pkg.hasPart(found.target)) {
     const root = parseXml(await pkg.readText(found.target)).documentElement!;
+    const resolver = new Styles(root, theme, () => {});
     for (const style of childElements(root).filter(
       (e) => isWord(e, "style") && wordAttribute(e, "type") === "paragraph",
     )) {
       const id = wordAttribute(style, "styleId");
-      if (id)
+      if (id) {
+        const resolved = resolver.paragraph({ styleId: id });
         result.set(id, {
           id,
           name: wordAttribute(childWord(style, "name") ?? style, "val") ?? id,
+          basedOn: wordAttribute(childWord(style, "basedOn") ?? style, "val"),
+          gallery:
+            !childWord(style, "semiHidden") &&
+            (!!childWord(style, "qFormat") ||
+              !!childWord(style, "unhideWhenUsed") ||
+              id === "Normal"),
+          run: resolved.run,
+          paragraph: resolved.properties,
         });
+      }
     }
   }
   return [...result.values()];
+}
+
+/** Edit the existing style definition; unrelated metadata and unknown properties survive. */
+export async function editStyle(
+  command: Extract<EditCommand, { type: "style" }>,
+  changes: Map<string, string>,
+  pkg: DocxPackage,
+  main: string,
+  writeRun: (run: Element, format: RunFormat) => void,
+  writeParagraph: (p: Element, format: ParagraphFormat) => void,
+) {
+  await ensureStyle(command.styleId, changes, pkg, main);
+  const view = {
+    ...pkg,
+    hasPart: (p: string) => changes.has(p) || pkg.hasPart(p),
+    readText: async (p: string) => changes.get(p) ?? pkg.readText(p),
+  };
+  const { path, root } = await related("styles", changes, view, main);
+  const style = childElements(root).find(
+    (e) =>
+      isWord(e, "style") && wordAttribute(e, "styleId") === command.styleId,
+  )!;
+  if (command.name !== undefined) {
+    if (!command.name.trim() || command.name.length > 200)
+      throw new Error("Enter a style name between 1 and 200 characters.");
+    val(style, "name", command.name.trim());
+  }
+  if (command.basedOn !== undefined) {
+    if (command.basedOn === command.styleId)
+      throw new Error("A style cannot be based on itself.");
+    let next = command.basedOn;
+    const seen = new Set([command.styleId]);
+    while (next) {
+      if (seen.has(next))
+        throw new Error("Style inheritance would create a cycle.");
+      seen.add(next);
+      const parent = childElements(root).find(
+        (e) => isWord(e, "style") && wordAttribute(e, "styleId") === next,
+      );
+      if (!parent) throw new Error("The base style does not exist.");
+      next = wordAttribute(childWord(parent, "basedOn") ?? parent, "val") ?? "";
+    }
+    if (command.basedOn) val(style, "basedOn", command.basedOn);
+    else {
+      const base = childWord(style, "basedOn");
+      if (base) style.removeChild(base);
+    }
+  }
+  if (command.gallery !== undefined) {
+    const existing = childWord(style, "qFormat");
+    if (command.gallery) {
+      val(style, "qFormat", "1");
+      const hidden = childWord(style, "semiHidden");
+      if (hidden) style.removeChild(hidden);
+    } else {
+      if (existing) style.removeChild(existing);
+      val(style, "semiHidden", "1");
+    }
+  }
+  if (command.run) {
+    const holder = root.ownerDocument!.createElementNS(
+      root.namespaceURI,
+      `${root.prefix || "w"}:r`,
+    );
+    const original = childWord(style, "rPr");
+    if (original) holder.appendChild(original.cloneNode(true));
+    const format = { ...command.run };
+    // In style definitions OOXML boolean properties toggle relative to the base style.
+    const basedOn = wordAttribute(childWord(style, "basedOn") ?? style, "val");
+    const resolver = new Styles(root, { colors: {}, fonts: {} }, () => {});
+    const base = basedOn
+      ? resolver.paragraph({ styleId: basedOn }).run
+      : resolver.defaults.run;
+    for (const key of [
+      "bold",
+      "italic",
+      "strike",
+      "caps",
+      "smallCaps",
+      "hidden",
+    ] as const)
+      if (format[key] !== undefined) format[key] = format[key] !== !!base[key];
+    writeRun(holder, format);
+    const replacement = childWord(holder, "rPr")!;
+    for (const [key, tag] of [
+      ["bold", "bCs"],
+      ["italic", "iCs"],
+    ] as const)
+      if (command.run[key] !== undefined)
+        val(
+          replacement,
+          tag,
+          command.run[key] !== !!base.complexScript?.[key] ? "1" : "0",
+        );
+    if (original) style.replaceChild(replacement, original);
+    else style.appendChild(replacement);
+  }
+  if (command.paragraph) {
+    const holder = root.ownerDocument!.createElementNS(
+      root.namespaceURI,
+      `${root.prefix || "w"}:p`,
+    );
+    const original = childWord(style, "pPr");
+    if (original) holder.appendChild(original.cloneNode(true));
+    const { styleId: ignored, ...format } = command.paragraph;
+    writeParagraph(holder, format);
+    const replacement = childWord(holder, "pPr")!;
+    if (original) style.replaceChild(replacement, original);
+    else style.insertBefore(replacement, childWord(style, "rPr") ?? null);
+  }
+  // CT_Style metadata precedes paragraph/run properties, even when a menu adds it later.
+  const styleOrder = [
+    "name",
+    "aliases",
+    "basedOn",
+    "next",
+    "link",
+    "autoRedefine",
+    "hidden",
+    "uiPriority",
+    "semiHidden",
+    "unhideWhenUsed",
+    "qFormat",
+    "locked",
+    "personal",
+    "personalCompose",
+    "personalReply",
+    "rsid",
+    "pPr",
+    "rPr",
+    "tblPr",
+    "trPr",
+    "tcPr",
+    "tblStylePr",
+  ];
+  const managed = childElements(style)
+    .filter((e) => isWord(e, e.localName!) && styleOrder.includes(e.localName!))
+    .sort(
+      (a, b) =>
+        styleOrder.indexOf(a.localName!) - styleOrder.indexOf(b.localName!),
+    );
+  for (const el of managed) style.appendChild(el);
+  changes.set(path, serialize(root));
 }
 export async function ensureStyle(
   id: string,
@@ -232,124 +409,203 @@ export async function setList(
 ) {
   const pPr = child(p, "pPr");
   if (pPr !== p.firstChild) p.insertBefore(pPr, p.firstChild);
-  let numPr = childWord(pPr, "numPr");
-  if (!numPr) {
-    numPr = child(pPr, "numPr");
-    const following = childElements(pPr).find((e) =>
-      [
-        "pBdr",
-        "shd",
-        "tabs",
-        "bidi",
-        "spacing",
-        "ind",
-        "jc",
-        "rPr",
-        "sectPr",
-      ].some((n) => isWord(e, n)),
-    );
-    if (following) pPr.insertBefore(numPr, following);
-  }
+  const numPr = child(pPr, "numPr");
+  const following = childElements(pPr).find((e) =>
+    [
+      "pBdr",
+      "shd",
+      "tabs",
+      "bidi",
+      "spacing",
+      "ind",
+      "jc",
+      "rPr",
+      "sectPr",
+    ].some((n) => isWord(e, n)),
+  );
+  if (following) pPr.insertBefore(numPr, following);
   if (command.kind === "none") {
     val(numPr, "numId", "0");
     return;
   }
-  if (
-    !["bullet", "decimal", "lowerLetter", "upperRoman"].includes(command.kind)
-  )
+  const formats = [
+    "bullet",
+    "decimal",
+    "decimalZero",
+    "lowerLetter",
+    "upperLetter",
+    "lowerRoman",
+    "upperRoman",
+  ];
+  if (!formats.includes(command.kind))
     throw new Error("Unsupported list format.");
-  const level = command.level ?? 0;
+  const level =
+    command.level ??
+    Number(wordAttribute(childWord(numPr, "ilvl") ?? numPr, "val") ?? 0);
   if (!Number.isInteger(level) || level < 0 || level > 8)
     throw new Error("List level must be between 1 and 9.");
   const start = command.start ?? 1;
   if (!Number.isSafeInteger(start) || start < 1 || start > 1_000_000)
     throw new Error("List start must be a positive whole number.");
+  const bullet = command.bullet ?? "\u2022",
+    pattern =
+      command.pattern?.replace(/%[1-9]/g, `%${level + 1}`) ?? `%${level + 1}.`;
+  if (bullet.length > 8 || /[\u0000-\u001f]/u.test(bullet))
+    throw new Error("Choose a valid bullet symbol.");
+  if (pattern.length > 100 || /[\u0000-\u001f]/u.test(pattern))
+    throw new Error("Invalid number format.");
   const { path, root } = await related("numbering", changes, pkg, main);
-  const nums = childElements(root).filter((e) => isWord(e, "num")),
-    abstracts = childElements(root).filter((e) => isWord(e, "abstractNum"));
-  // Continue the existing list for a level change; restart/format changes create a new instance.
+  const nums = childElements(root).filter((e) => isWord(e, "num"));
+  const abstracts = childElements(root).filter((e) => isWord(e, "abstractNum"));
+  const next = (items: Element[], key: string) =>
+    String(
+      Math.max(0, ...items.map((e) => Number(wordAttribute(e, key)) || 0)) + 1,
+    );
+  const numId = (el: Element | undefined) => {
+    const pr = el && childWord(el, "pPr"),
+      num = pr && childWord(pr, "numPr");
+    return num && wordAttribute(childWord(num, "numId") ?? num, "val");
+  };
+  const definition = (id: string | undefined) => {
+    const num = nums.find((e) => wordAttribute(e, "numId") === id);
+    const aId =
+      num && wordAttribute(childWord(num, "abstractNumId") ?? num, "val");
+    return {
+      num,
+      abstract: abstracts.find(
+        (e) => wordAttribute(e, "abstractNumId") === aId,
+      ),
+    };
+  };
+  const own = wordAttribute(childWord(numPr, "numId") ?? numPr, "val");
   const siblings = childElements(p.parentNode as Element),
-    previous = siblings[siblings.indexOf(p) - 1];
-  const previousPr =
-    previous && isWord(previous, "p") ? childWord(previous, "pPr") : undefined;
-  const previousNum = previousPr && childWord(previousPr, "numPr");
-  const existing =
-    wordAttribute(childWord(numPr, "numId") ?? numPr, "val") ??
-    (previousNum &&
-      wordAttribute(childWord(previousNum, "numId") ?? previousNum, "val"));
-  let id = existing;
-  const definition = id && nums.find((e) => wordAttribute(e, "numId") === id);
-  const abstractId =
-    definition &&
-    wordAttribute(childWord(definition, "abstractNumId") ?? definition, "val");
-  const current = abstracts.find(
-    (e) => wordAttribute(e, "abstractNumId") === abstractId,
-  );
-  const currentKind =
-    current &&
-    wordAttribute(
-      childWord(
-        childElements(current).find((e) => isWord(e, "lvl")) ?? current,
-        "numFmt",
-      ) ?? current,
-      "val",
-    );
-  if (
-    !definition ||
-    command.restart ||
-    command.start !== undefined ||
-    currentKind !== command.kind
-  ) {
-    const next = (items: Element[], key: string) =>
-      String(
-        Math.max(0, ...items.map((e) => Number(wordAttribute(e, key)) || 0)) +
-          1,
+    index = siblings.indexOf(p);
+  const matches = (id: string | undefined) => {
+    const a = definition(id).abstract;
+    const lvl =
+      a &&
+      childElements(a).find(
+        (e) => isWord(e, "lvl") && wordAttribute(e, "ilvl") === String(level),
       );
-    const a = root.ownerDocument!.createElementNS(
-      root.namespaceURI,
-      `${root.prefix || "w"}:abstractNum`,
-    );
-    const aId = next(abstracts, "abstractNumId");
-    value(a, "abstractNumId", aId);
-    const firstNum = nums[0];
-    root.insertBefore(a, firstNum ?? null);
-    val(a, "multiLevelType", "multilevel");
-    for (let i = 0; i < 9; i++) {
-      const lvl = root.ownerDocument!.createElementNS(
-        root.namespaceURI,
-        `${root.prefix || "w"}:lvl`,
+    if (!lvl) return false;
+    if (command.multilevel)
+      return (
+        wordAttribute(childWord(a!, "name") ?? a!, "val") ===
+        `Docs-${command.multilevel}`
       );
-      value(lvl, "ilvl", i);
-      a.appendChild(lvl);
-      val(lvl, "start", i === level ? start : 1);
-      val(lvl, "numFmt", command.kind);
-      const bullet = command.bullet ?? "•";
-      if (bullet.length > 8 || /[\u0000-\u001f]/u.test(bullet))
-        throw new Error("Choose a valid bullet symbol.");
-      val(lvl, "lvlText", command.kind === "bullet" ? bullet : `%${i + 1}.`);
-      val(lvl, "lvlJc", rtl ? "right" : "left");
-      const pr = child(lvl, "pPr"),
-        tabs = child(pr, "tabs"),
-        tab = child(tabs, "tab");
-      value(tab, "val", "num");
-      value(tab, "pos", 720 * (i + 1));
-      const ind = child(pr, "ind");
-      value(ind, rtl ? "right" : "left", 720 * (i + 1));
-      value(ind, "hanging", 360);
+    return (
+      wordAttribute(childWord(lvl, "numFmt") ?? lvl, "val") === command.kind &&
+      (((command.restart || command.start !== undefined || command.continue) &&
+        command.pattern === undefined &&
+        command.bullet === undefined) ||
+        wordAttribute(childWord(lvl, "lvlText") ?? lvl, "val") ===
+          (command.kind === "bullet" ? bullet : pattern))
+    );
+  };
+  let id = command.continue ? undefined : own;
+  if (command.continue) {
+    for (let i = index - 1; i >= 0; i--) {
+      if (!isWord(siblings[i], "p")) break;
+      const candidate = numId(siblings[i]);
+      if (candidate && matches(candidate)) {
+        id = candidate;
+        break;
+      }
     }
-    const num = root.ownerDocument!.createElementNS(
-      root.namespaceURI,
-      `${root.prefix || "w"}:num`,
-    );
-    id = next(nums, "numId");
-    value(num, "numId", id);
-    val(num, "abstractNumId", aId);
-    root.appendChild(num);
-    changes.set(path, serialize(root));
+    if (!id)
+      throw new Error(
+        "No previous list with this format was found in this container.",
+      );
   }
+  if (
+    !command.preserveDefinition &&
+    !command.continue &&
+    (!matches(id) || command.restart || command.start !== undefined)
+  ) {
+    const adjacent = [siblings[index - 1], siblings[index + 1]].filter(
+      (e) => e && isWord(e, "p"),
+    );
+    id =
+      !command.restart && command.start === undefined
+        ? adjacent
+            .map(numId)
+            .find((candidate) => candidate !== own && matches(candidate))
+        : undefined;
+    if (!id) {
+      let a = definition(own).abstract;
+      if (!a || !matches(own)) {
+        a = root.ownerDocument!.createElementNS(
+          root.namespaceURI,
+          `${root.prefix || "w"}:abstractNum`,
+        );
+        value(a, "abstractNumId", next(abstracts, "abstractNumId"));
+        root.insertBefore(a, nums[0] ?? null);
+        val(
+          a,
+          "multiLevelType",
+          command.multilevel ? "multilevel" : "hybridMultilevel",
+        );
+        if (command.multilevel) val(a, "name", `Docs-${command.multilevel}`);
+        for (let i = 0; i < 9; i++) {
+          const lvl = root.ownerDocument!.createElementNS(
+            root.namespaceURI,
+            `${root.prefix || "w"}:lvl`,
+          );
+          value(lvl, "ilvl", i);
+          a.appendChild(lvl);
+          const kind =
+            command.multilevel === "mixed"
+              ? ["decimal", "lowerLetter", "lowerRoman"][i % 3]
+              : command.multilevel === "bullet"
+                ? "bullet"
+                : command.kind;
+          val(lvl, "start", 1);
+          val(lvl, "numFmt", kind);
+          const marker =
+            command.multilevel === "decimal"
+              ? Array.from({ length: i + 1 }, (_, n) => `%${n + 1}`).join(".") +
+                "."
+              : kind === "bullet"
+                ? command.multilevel === "bullet"
+                  ? ["\u2022", "\u25cb", "\u25aa"][i % 3]
+                  : bullet
+                : command.pattern
+                  ? command.pattern.replace(/%[1-9]/g, `%${i + 1}`)
+                  : `%${i + 1}.`;
+          val(lvl, "lvlText", marker);
+          val(lvl, "lvlJc", rtl ? "right" : "left");
+          val(lvl, "suff", "tab");
+          const pr = child(lvl, "pPr"),
+            tab = child(child(pr, "tabs"), "tab");
+          value(tab, "val", "num");
+          value(tab, "pos", 720 * (i + 1));
+          const ind = child(pr, "ind");
+          value(ind, rtl ? "right" : "left", 720 * (i + 1));
+          value(ind, "hanging", 360);
+        }
+      }
+      const num = root.ownerDocument!.createElementNS(
+        root.namespaceURI,
+        `${root.prefix || "w"}:num`,
+      );
+      id = next(nums, "numId");
+      value(num, "numId", id);
+      val(num, "abstractNumId", wordAttribute(a, "abstractNumId")!);
+      if (command.restart || command.start !== undefined) {
+        const override = child(num, "lvlOverride");
+        value(override, "ilvl", level);
+        val(override, "startOverride", start);
+      }
+      root.appendChild(num);
+      changes.set(path, serialize(root));
+    }
+  }
+  if (!id || (command.preserveDefinition && !definition(id).num))
+    throw new Error("This paragraph does not have a list definition.");
   val(numPr, "ilvl", level);
-  val(numPr, "numId", id!);
-  // ilvl precedes numId in CT_NumPr, including when editing an existing list.
+  val(numPr, "numId", id);
   const ilvl = childWord(numPr, "ilvl")!;
   if (ilvl !== numPr.firstChild) numPr.insertBefore(ilvl, numPr.firstChild);
+  const ind = childWord(pPr, "ind");
+  if (ind) pPr.removeChild(ind);
 }

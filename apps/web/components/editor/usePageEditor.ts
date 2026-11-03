@@ -244,7 +244,33 @@ export function usePageEditor(options: Options) {
         void structural("splitParagraph");
       } else if (event.key === "Tab") {
         event.preventDefault();
-        insert("\t");
+        const picked = capture(),
+          p = paragraphs(latest.current.document).find(
+            (p) => p.id === picked?.id,
+          );
+        if (p?.properties.list && (picked?.start === 0 || event.shiftKey)) {
+          void flush()
+            .then(() =>
+              latest.current.onCommand({
+                type: "list",
+                id: p.id!,
+                kind: p.properties.list!.format as Extract<
+                  EditCommand,
+                  { type: "list" }
+                >["kind"],
+                level: Math.max(
+                  0,
+                  Math.min(
+                    8,
+                    (p.properties.numbering?.level ?? 0) +
+                      (event.shiftKey ? -1 : 1),
+                  ),
+                ),
+                preserveDefinition: true,
+              }),
+            )
+            .catch(report);
+        } else insert("\t");
       } else if (event.key === "Backspace" || event.key === "Delete") {
         const picked = capture(),
           value = editableText(el);
@@ -255,6 +281,21 @@ export function usePageEditor(options: Options) {
             (event.key === "Delete" && picked.end === value.length))
         ) {
           event.preventDefault();
+          const p = paragraphs(latest.current.document).find(
+            (p) => p.id === picked.id,
+          );
+          if (event.key === "Backspace" && p?.properties.list) {
+            void flush()
+              .then(() =>
+                latest.current.onCommand({
+                  type: "list",
+                  id: picked.id,
+                  kind: "none",
+                }),
+              )
+              .catch(report);
+            return;
+          }
           void structural(
             "joinParagraph",
             event.key === "Backspace" ? "backward" : "forward",
@@ -347,7 +388,8 @@ export function usePageEditor(options: Options) {
     input();
   }
   function focus() {
-    if (window.document.querySelector("dialog[open]")) return;
+    if (window.document.querySelector("dialog[open], [data-home-menu-root]"))
+      return;
     focused.current = true;
     restoring.current = true;
     const el = ensureIsland(true);

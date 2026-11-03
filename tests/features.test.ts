@@ -323,7 +323,8 @@ describe('styles, fonts and typography', () => {
     const output = html(document);
     expect(output).toContain('color:#23DFA2');
     expect(output).toContain('background-color:#FFFF00');
-    expect(output).toContain('text-decoration-line:underline line-through');
+    expect(output).toContain('text-decoration-line:underline');
+    expect(output).toContain('text-decoration:line-through solid');
     expect(output).toContain('vertical-align:super');
   });
 });

@@ -1,12 +1,18 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   Paragraph,
   ParagraphFormat,
   RunFormat,
   EditCommand,
+  DocxStyle,
 } from "@local/docx-ir-engine";
 import { Dialog } from "./Controls";
 import { HomeIcon } from "./HomeRibbon";
+import { HomeMenu, type MenuAnchor } from "./HomeMenu";
+import { ListGallery, ListDefinitionForm } from "./ListGallery";
+import { EffectsGallery } from "./EffectsGallery";
+import { StyleForm } from "./StyleForm";
+import { StylePreview } from "./StylePreview";
 import { FontChooser, FontForm, Palette, dialogData } from "./FontDialogs";
 
 interface Props {
@@ -16,7 +22,11 @@ interface Props {
   selected?: Paragraph;
   format: RunFormat;
   families: string[];
-  styles: { id: string; name: string }[];
+  styles: DocxStyle[];
+  anchor: MenuAnchor | null;
+  contextStyle: string;
+  onStyleContext: (id: string, anchor: MenuAnchor) => void;
+  onStyleAction: (name: string, id: string) => void;
   clipboard: string[];
   query: string;
   replacement: string;
@@ -58,6 +68,13 @@ const titles: Record<string, string> = {
   findDialog: "Find and Replace",
   goto: "Go To",
   select: "Select",
+  styleContext: "Style",
+  styleModify: "Modify Style",
+  styleRename: "Rename Style",
+  defineBullet: "Define New Bullet",
+  defineNumber: "Define New Number Format",
+  defineMultilevel: "Define New Multilevel List",
+  numberValue: "Set Numbering Value",
 };
 const highlightColors = [
   ["Yellow", "yellow", "#FFFF00"],
@@ -84,7 +101,12 @@ export function HomeDialogs(p: Props) {
     },
     id = p.selected?.id ?? "";
   return (
-    <Dialog title={titles[p.dialog] ?? "Home"} onClose={p.onClose}>
+    <HomeSurface
+      name={p.dialog}
+      title={titles[p.dialog] ?? "Home"}
+      anchor={p.anchor}
+      onClose={p.onClose}
+    >
       <div className={`home-dialog-body home-dialog-${p.dialog}`}>
         {(p.dialog === "paste" || p.dialog === "clipboard") && (
           <>
@@ -293,13 +315,27 @@ export function HomeDialogs(p: Props) {
         {(p.dialog === "bullets" ||
           p.dialog === "numbering" ||
           p.dialog === "multilevel") && (
-          <ListForm
-            id={id}
-            dialog={p.dialog}
-            level={p.selected?.properties.numbering?.level ?? 0}
+          <ListGallery
+            mode={p.dialog}
+            selected={p.selected}
+            apply={(command) => choose(() => p.onCommand(command))}
+            onDialog={p.onDialog}
+          />
+        )}
+        {[
+          "defineBullet",
+          "defineNumber",
+          "defineMultilevel",
+          "numberValue",
+        ].includes(p.dialog) && (
+          <ListDefinitionForm
+            key={p.dialog}
+            mode={p.dialog}
+            selected={p.selected}
             apply={(command) => choose(() => p.onCommand(command))}
           />
         )}
+
         {p.dialog === "spacing" && (
           <>
             <div className="home-choice-grid">
@@ -367,54 +403,137 @@ export function HomeDialogs(p: Props) {
           </>
         )}
         {p.dialog === "effects" && (
-          <>
-            <p className="pane-description">
-              Typography options supported by the current engine.
-            </p>
-            <button className="home-choice" onClick={() => p.onDialog("font")}>
-              Font, character spacing and position…
-            </button>
-            <button
-              className="home-choice"
-              onClick={() =>
-                choose(() => p.onRun({ smallCaps: !p.format.smallCaps }))
-              }
-            >
-              Small caps
-            </button>
-            <button
-              className="home-choice"
-              onClick={() => choose(() => p.onRun({ caps: !p.format.caps }))}
-            >
-              All caps
-            </button>
-            <p className="pane-description">
-              Outline, glow, reflection and font-specific stylistic sets are not
-              editable yet.
-            </p>
-          </>
+          <EffectsGallery
+            format={p.format}
+            onPick={(format) => choose(() => p.onRun(format))}
+          />
         )}
         {p.dialog === "styles" && (
           <>
             <div className="home-styles-list">
-              {p.styles.map((style) => (
-                <button
-                  key={style.id}
-                  onClick={() =>
-                    choose(() => p.onParagraph({ styleId: style.id }))
-                  }
-                >
-                  <span>AaBbCc</span>
-                  <b>{style.name}</b>
-                </button>
-              ))}
+              {p.styles
+                .filter((s) => s.gallery)
+                .map((style) => (
+                  <button
+                    key={style.id}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      p.onStyleContext(style.id, {
+                        left: e.clientX,
+                        right: e.clientX,
+                        top: e.clientY,
+                        bottom: e.clientY,
+                      });
+                    }}
+                    onClick={() =>
+                      choose(() => p.onParagraph({ styleId: style.id }))
+                    }
+                  >
+                    <StylePreview style={style} />
+                    <small>{style.name}</small>
+                  </button>
+                ))}
             </div>
-            <p className="pane-description">
-              Styles apply to the selected paragraph. Direct font formatting
-              remains an override; Clear All Formatting removes those overrides.
-            </p>
+            <hr />
+            <button
+              className="home-choice"
+              onClick={() => choose(() => p.onAction("clear"))}
+            >
+              Clear Formatting
+            </button>
+            <button
+              className="home-choice"
+              onClick={() => p.onDialog("allStyles")}
+            >
+              Apply Styles…
+            </button>
           </>
         )}
+        {p.dialog === "allStyles" && (
+          <div className="home-styles-list">
+            {p.styles.map((style) => (
+              <button
+                key={style.id}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  p.onStyleContext(style.id, {
+                    left: e.clientX,
+                    right: e.clientX,
+                    top: e.clientY,
+                    bottom: e.clientY,
+                  });
+                }}
+                onClick={() =>
+                  choose(() => p.onParagraph({ styleId: style.id }))
+                }
+              >
+                <StylePreview style={style} />
+              </button>
+            ))}
+          </div>
+        )}
+        {p.dialog === "styleContext" &&
+          (() => {
+            const style = p.styles.find((s) => s.id === p.contextStyle);
+            return (
+              style && (
+                <>
+                  <button
+                    className="home-choice"
+                    onClick={() =>
+                      choose(() => p.onStyleAction("update", style.id))
+                    }
+                  >
+                    Update {style.name} to Match Selection
+                  </button>
+                  <button
+                    className="home-choice"
+                    onClick={() => p.onDialog("styleModify")}
+                  >
+                    Modify…
+                  </button>
+                  <button
+                    className="home-choice"
+                    onClick={() =>
+                      choose(() => p.onStyleAction("select", style.id))
+                    }
+                  >
+                    Select All Instances
+                  </button>
+                  <hr />
+                  <button
+                    className="home-choice"
+                    onClick={() => p.onDialog("styleRename")}
+                  >
+                    Rename…
+                  </button>
+                  <button
+                    className="home-choice"
+                    onClick={() =>
+                      choose(() => p.onStyleAction("remove", style.id))
+                    }
+                  >
+                    Remove from Style Gallery
+                  </button>
+                </>
+              )
+            );
+          })()}
+        {(p.dialog === "styleModify" || p.dialog === "styleRename") &&
+          (() => {
+            const style = p.styles.find((s) => s.id === p.contextStyle);
+            return (
+              style && (
+                <StyleForm
+                  key={p.dialog + style.id}
+                  style={style}
+                  styles={p.styles}
+                  rename={p.dialog === "styleRename"}
+                  onApply={(command) => choose(() => p.onCommand(command))}
+                />
+              )
+            );
+          })()}
         {p.dialog === "sort" && (
           <form
             onSubmit={(event) => {
@@ -479,6 +598,25 @@ export function HomeDialogs(p: Props) {
             onReplace={p.onReplace}
           />
         )}
+        {p.dialog === "findMenu" && (
+          <>
+            <button
+              className="home-choice"
+              onClick={() => choose(() => p.onAction("find"))}
+            >
+              Find
+            </button>
+            <button
+              className="home-choice"
+              onClick={() => p.onDialog("findDialog")}
+            >
+              Advanced Find…
+            </button>
+            <button className="home-choice" onClick={() => p.onDialog("goto")}>
+              Go To…
+            </button>
+          </>
+        )}
         {p.dialog === "goto" && (
           <form
             onSubmit={(event) => {
@@ -526,127 +664,7 @@ export function HomeDialogs(p: Props) {
           </div>
         )}
       </div>
-    </Dialog>
-  );
-}
-function ListForm({
-  id,
-  dialog,
-  level,
-  apply,
-}: {
-  id: string;
-  dialog: string;
-  level: number;
-  apply: (command: EditCommand) => void;
-}) {
-  return (
-    <>
-      <div className="list-preset-grid">
-        {dialog === "bullets"
-          ? ["•", "○", "▪", "◆", "➢", "✓"].map((bullet) => (
-              <button
-                key={bullet}
-                onClick={() =>
-                  apply({ type: "list", id, kind: "bullet", bullet })
-                }
-              >
-                <span>{bullet} ━━━</span>
-                <span>{bullet} ━━━</span>
-                <span>{bullet} ━━━</span>
-              </button>
-            ))
-          : (
-              [
-                ["1.", "decimal"],
-                ["a.", "lowerLetter"],
-                ["I.", "upperRoman"],
-              ] as const
-            ).map(([marker, kind]) => (
-              <button
-                key={kind}
-                onClick={() => apply({ type: "list", id, kind })}
-              >
-                <span>{marker} ━━━</span>
-                <span>
-                  {marker === "1." ? "2." : marker === "a." ? "b." : "II."} ━━━
-                </span>
-                <span>
-                  {marker === "1." ? "3." : marker === "a." ? "c." : "III."} ━━━
-                </span>
-              </button>
-            ))}
-      </div>
-      <button
-        className="home-choice"
-        onClick={() => apply({ type: "list", id, kind: "none" })}
-      >
-        None — remove list formatting
-      </button>
-      <h3>List level and start</h3>
-      <form
-        onSubmit={(event) => {
-          const d = dialogData(event);
-          apply({
-            type: "list",
-            id,
-            kind:
-              dialog === "bullets"
-                ? "bullet"
-                : (String(d.get("kind")) as
-                    | "decimal"
-                    | "lowerLetter"
-                    | "upperRoman"),
-            level: Number(d.get("level")) - 1,
-            ...(d.has("restart")
-              ? { start: Number(d.get("start")), restart: true }
-              : {}),
-          });
-        }}
-      >
-        <div className="field-row">
-          <label className="field">
-            Level
-            <input
-              name="level"
-              type="number"
-              min="1"
-              max="9"
-              defaultValue={level + 1}
-            />
-          </label>
-          <label className="field">
-            Number style
-            <select
-              name="kind"
-              defaultValue="decimal"
-              disabled={dialog === "bullets"}
-            >
-              <option value="decimal">1, 2, 3</option>
-              <option value="lowerLetter">a, b, c</option>
-              <option value="upperRoman">I, II, III</option>
-            </select>
-          </label>
-        </div>
-        <label className="check-field">
-          <input type="checkbox" name="restart" />
-          Restart numbering
-        </label>
-        <label className="field">
-          Start at
-          <input
-            name="start"
-            type="number"
-            min="1"
-            max="1000000"
-            defaultValue="1"
-          />
-        </label>
-        <div className="dialog-actions">
-          <button className="primary-button">Apply</button>
-        </div>
-      </form>
-    </>
+    </HomeSurface>
   );
 }
 function SearchForm({
@@ -739,5 +757,50 @@ function SearchForm({
         </p>
       )}
     </form>
+  );
+}
+
+const dropdowns = new Set([
+  "paste",
+  "fontFamily",
+  "fontSize",
+  "case",
+  "underline",
+  "highlight",
+  "color",
+  "shading",
+  "borders",
+  "bullets",
+  "numbering",
+  "multilevel",
+  "spacing",
+  "justify",
+  "effects",
+  "styles",
+  "select",
+  "styleContext",
+  "findMenu",
+]);
+function HomeSurface({
+  name,
+  title,
+  anchor,
+  onClose,
+  children,
+}: {
+  name: string;
+  title: string;
+  anchor: MenuAnchor | null;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return dropdowns.has(name) ? (
+    <HomeMenu label={title} anchor={anchor} onClose={onClose}>
+      {children}
+    </HomeMenu>
+  ) : (
+    <Dialog title={title} onClose={onClose}>
+      {children}
+    </Dialog>
   );
 }

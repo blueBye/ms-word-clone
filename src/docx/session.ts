@@ -1,6 +1,11 @@
 import { XMLSerializer, type Element } from "@xmldom/xmldom";
 import { zipSync, strToU8 } from "fflate";
-import type { DocumentIR, Paragraph } from "../model/document.js";
+import type {
+  DocumentIR,
+  Paragraph,
+  ParagraphProperties,
+  RunProperties,
+} from "../model/document.js";
 import { parseDocxPackage } from "./import-docx.js";
 import {
   openDocxPackage,
@@ -17,9 +22,32 @@ import {
   wordAttribute,
 } from "./parser/xml.js";
 import { readRelationships } from "./relationships.js";
-import { setList, ensureStyle, readStyles } from "./session-parts.js";
+import {
+  setList,
+  ensureStyle,
+  readStyles,
+  editStyle,
+} from "./session-parts.js";
+import { writeTextEffects, W14 } from "./text-effects.js";
+
+export interface DocxStyle {
+  id: string;
+  name: string;
+  basedOn?: string;
+  gallery: boolean;
+  run: RunProperties;
+  paragraph: ParagraphProperties;
+}
 
 export interface RunFormat {
+  textOutline?: RunProperties["textOutline"];
+  textShadow?: RunProperties["textShadow"];
+  glow?: RunProperties["glow"];
+  reflection?: RunProperties["reflection"];
+  ligatures?: RunProperties["ligatures"];
+  numberForm?: RunProperties["numberForm"];
+  numberSpacing?: RunProperties["numberSpacing"];
+  stylisticSets?: RunProperties["stylisticSets"];
   clear?: boolean;
   bold?: boolean;
   italic?: boolean;
@@ -79,11 +107,32 @@ export type EditCommand =
   | {
       type: "list";
       id: string;
-      kind: "bullet" | "decimal" | "lowerLetter" | "upperRoman" | "none";
+      kind:
+        | "bullet"
+        | "decimal"
+        | "decimalZero"
+        | "lowerLetter"
+        | "upperLetter"
+        | "upperRoman"
+        | "lowerRoman"
+        | "none";
       level?: number;
       start?: number;
       bullet?: string;
       restart?: boolean;
+      continue?: boolean;
+      preserveDefinition?: boolean;
+      pattern?: string;
+      multilevel?: "decimal" | "mixed" | "bullet";
+    }
+  | {
+      type: "style";
+      styleId: string;
+      name?: string;
+      basedOn?: string;
+      gallery?: boolean;
+      run?: RunFormat;
+      paragraph?: ParagraphFormat;
     }
   | {
       type: "sort";
@@ -119,7 +168,7 @@ export interface DocxSession {
   readonly canSetPage: boolean;
   readonly lockedReason: string | undefined;
   readonly selection: { id: string; start: number; end: number } | undefined;
-  styles(): Promise<{ id: string; name: string }[]>;
+  styles(): Promise<DocxStyle[]>;
   capability(id: string): ParagraphCapability;
   execute(command: EditCommand): Promise<DocumentIR>;
   executeBatch(commands: EditCommand[]): Promise<DocumentIR>;
@@ -243,7 +292,9 @@ function ensure(parent: Element, name: string, order: string[] = []): Element {
   );
   const rank = order.indexOf(name);
   const before = childElements(parent).find(
-    (e) => order.indexOf(e.localName!) > rank && rank >= 0,
+    (e) =>
+      rank >= 0 &&
+      (order.indexOf(e.localName!) > rank || e.namespaceURI === W14),
   );
   parent.insertBefore(node, before ?? null);
   return node;
@@ -374,7 +425,7 @@ function runWithText(base: Element, text: string): Element {
   }
   return run;
 }
-function setRun(run: Element, format: RunFormat) {
+function setRun(run: Element, format: RunFormat, inheritedColor?: string) {
   if (format.clear) clearRun(run);
   const pr = properties(run, "rPr");
   for (const [key, tags] of [
@@ -472,6 +523,7 @@ function setRun(run: Element, format: RunFormat) {
       throw new Error("Unsupported script position.");
     prop(pr, "vertAlign", format.verticalAlign, rOrder);
   }
+  writeTextEffects(pr, format, inheritedColor);
 }
 function setParagraph(p: Element, format: ParagraphFormat) {
   const pr = properties(p, "pPr");
@@ -479,6 +531,53 @@ function setParagraph(p: Element, format: ParagraphFormat) {
     if (!format.styleId || format.styleId.length > 250)
       throw new Error("Invalid style.");
     prop(pr, "pStyle", format.styleId, pOrder);
+    for (const node of childElements(pr))
+      if (
+        [
+          "jc",
+          "spacing",
+          "ind",
+          "keepNext",
+          "keepLines",
+          "pageBreakBefore",
+          "outlineLvl",
+          "contextualSpacing",
+        ].some((n) => isWord(node, n))
+      )
+        pr.removeChild(node);
+    // Whole-paragraph direct formatting yields to the style. Distinct inline emphasis survives.
+    if (plain(p)) {
+      const runs = childElements(p).filter((e) => isWord(e, "r"));
+      for (const tag of [
+        "rFonts",
+        "sz",
+        "szCs",
+        "b",
+        "bCs",
+        "i",
+        "iCs",
+        "color",
+        "u",
+        "strike",
+        "caps",
+        "smallCaps",
+      ]) {
+        const props = runs.map((r) => {
+          const rp = childWord(r, "rPr");
+          return rp && childWord(rp, tag);
+        });
+        if (
+          props.length &&
+          props.every(
+            (node) =>
+              node &&
+              serializer.serializeToString(node) ===
+                serializer.serializeToString(props[0]!),
+          )
+        )
+          for (const node of props) node!.parentNode!.removeChild(node!);
+      }
+    }
   }
   if (format.shading !== undefined) {
     const shd = ensure(pr, "shd", pOrder);
@@ -577,6 +676,7 @@ function setParagraph(p: Element, format: ParagraphFormat) {
 function rewriteText(
   p: Element,
   command: Extract<EditCommand, { type: "text" | "run" | "clearRun" }>,
+  effective?: Paragraph,
 ) {
   const text = textContent(p);
   const start = command.start ?? 0,
@@ -587,6 +687,17 @@ function rewriteText(
     runs[0] ??
     p.ownerDocument!.createElementNS(p.namespaceURI, `${p.prefix || "w"}:r`);
   const output: Element[] = [];
+  const colorAt = (position: number) => {
+    let offset = 0,
+      last = effective?.markProperties?.color;
+    for (const inline of effective?.children ?? [])
+      if (inline.type === "text") {
+        offset += inline.text.length;
+        last = inline.properties.color;
+        if (position < offset) return last;
+      }
+    return last;
+  };
   let offset = 0,
     inserted = false;
   if (command.type === "text") validText(command.text);
@@ -609,7 +720,7 @@ function rewriteText(
         );
         if (cuts[i] >= start && cuts[i + 1] <= end) {
           if (command.type === "clearRun") clearRun(item);
-          else setRun(item, command.format);
+          else setRun(item, command.format, colorAt(cuts[i]));
         }
         output.push(item);
       }
@@ -617,7 +728,7 @@ function rewriteText(
         const item = run.cloneNode(true) as Element;
         if (start === 0 && end === text.length) {
           if (command.type === "clearRun") clearRun(item);
-          else setRun(item, command.format);
+          else setRun(item, command.format, colorAt(offset));
         }
         output.push(item);
       }
@@ -626,7 +737,7 @@ function rewriteText(
       else if (offset >= end) {
         if (!inserted) {
           const item = runWithText(run, command.text);
-          if (command.format) setRun(item, command.format);
+          if (command.format) setRun(item, command.format, colorAt(start));
           output.push(item);
           inserted = true;
         }
@@ -636,7 +747,7 @@ function rewriteText(
           output.push(runWithText(run, value.slice(0, start - offset)));
         if (!inserted) {
           const item = runWithText(run, command.text);
-          if (command.format) setRun(item, command.format);
+          if (command.format) setRun(item, command.format, colorAt(start));
           output.push(item);
           inserted = true;
         }
@@ -648,12 +759,12 @@ function rewriteText(
   }
   if (command.type === "text" && !inserted) {
     const item = runWithText(runs.at(-1) ?? base, command.text);
-    if (command.format) setRun(item, command.format);
+    if (command.format) setRun(item, command.format, colorAt(start));
     output.push(item);
   }
   if (command.type === "run" && !runs.length) {
     const item = runWithText(base, "");
-    setRun(item, command.format);
+    setRun(item, command.format, colorAt(0));
     output.push(item);
   }
   for (const run of runs) p.removeChild(run);
@@ -664,7 +775,19 @@ function clearRun(run: Element) {
   if (pr)
     for (const child of childElements(pr))
       if (
-        rOrder.includes(child.localName!) &&
+        (rOrder.includes(child.localName!) ||
+          (child.namespaceURI === W14 &&
+            [
+              "glow",
+              "shadow",
+              "reflection",
+              "textOutline",
+              "textFill",
+              "ligatures",
+              "numForm",
+              "numSpacing",
+              "stylisticSets",
+            ].includes(child.localName!))) &&
         !["rPrChange", "oMath"].includes(child.localName!)
       )
         pr.removeChild(child);
@@ -809,7 +932,7 @@ export async function openDocxSession(
     ) {
       const allowed = capability(command.id);
       if (!allowed.text) throw new Error(allowed.reason);
-      rewriteText(p!, command);
+      rewriteText(p!, command, source?.paragraph);
       nextSelection =
         command.type === "text"
           ? {
@@ -827,29 +950,41 @@ export async function openDocxSession(
       if (!allowed.text) throw new Error(allowed.reason);
       const content = textContent(p!);
       range(content, command.start, command.end);
-      const second = p!.cloneNode(true) as Element;
-      rewriteText(p!, {
-        type: "text",
-        id: command.id,
-        start: command.start,
-        end: content.length,
-        text: "",
-      });
-      rewriteText(second, {
-        type: "text",
-        id: command.id,
-        start: 0,
-        end: command.end,
-        text: "",
-      });
-      // A section boundary belongs to the last of the two resulting paragraphs.
-      const firstPr = childWord(p!, "pPr"),
-        section = firstPr && childWord(firstPr, "sectPr");
-      if (section) firstPr!.removeChild(section);
-      p!.parentNode!.insertBefore(second, p!.nextSibling);
-      const id = `p${nextIdentity++}`;
-      known.set(second, id);
-      nextSelection = { id, start: 0, end: 0 };
+      if (!content.length && source!.paragraph.properties.list) {
+        // Enter on an empty list item ends the list rather than adding another empty item.
+        await setList(
+          p!,
+          { type: "list", id: command.id, kind: "none" },
+          updated,
+          overlay(updated),
+          main,
+          source!.paragraph.properties.direction === "rtl",
+        );
+      } else {
+        const second = p!.cloneNode(true) as Element;
+        rewriteText(p!, {
+          type: "text",
+          id: command.id,
+          start: command.start,
+          end: content.length,
+          text: "",
+        });
+        rewriteText(second, {
+          type: "text",
+          id: command.id,
+          start: 0,
+          end: command.end,
+          text: "",
+        });
+        // A section boundary belongs to the last of the two resulting paragraphs.
+        const firstPr = childWord(p!, "pPr"),
+          section = firstPr && childWord(firstPr, "sectPr");
+        if (section) firstPr!.removeChild(section);
+        p!.parentNode!.insertBefore(second, p!.nextSibling);
+        const id = `p${nextIdentity++}`;
+        known.set(second, id);
+        nextSelection = { id, start: 0, end: 0 };
+      }
     } else if (command.type === "joinParagraph") {
       if (!capability(command.id).text)
         throw new Error(capability(command.id).reason);
@@ -875,7 +1010,15 @@ export async function openDocxSession(
       nextSelection = { id: known.get(first)!, start: offset, end: offset };
     } else if (command.type === "list") {
       if (!source) throw new Error("Select a paragraph.");
+      if (!capability(command.id).format)
+        throw new Error(capability(command.id).reason);
       const pr = properties(p!, "pPr");
+      const inherited = source.paragraph.properties.numbering;
+      if (inherited?.id && !childWord(childWord(pr, "numPr") ?? pr, "numId")) {
+        const numPr = ensure(pr, "numPr", pOrder);
+        prop(numPr, "ilvl", inherited.level ?? 0, ["ilvl", "numId"]);
+        prop(numPr, "numId", inherited.id, ["ilvl", "numId"]);
+      }
       await setList(
         p!,
         command,
@@ -920,6 +1063,15 @@ export async function openDocxSession(
       );
       for (const el of sorted) parent.insertBefore(el, marker);
       parent.removeChild(marker);
+    } else if (command.type === "style") {
+      await editStyle(
+        command,
+        updated,
+        overlay(updated),
+        main,
+        setRun,
+        setParagraph,
+      );
     } else if (command.type === "paragraph") {
       // Source restriction applies even when changing only paragraph properties.
       for (
@@ -1061,7 +1213,11 @@ export async function openDocxSession(
       }
     }
     const value = serializer.serializeToString(xml);
-    if (value === (await overlay(current).readText(part))) return document!;
+    if (
+      value === (await overlay(current).readText(part)) &&
+      [...updated].every(([path, content]) => current.get(path) === content)
+    )
+      return document!;
     updated.set(part, value);
     const identities = new Map(identityStates[cursor]);
     for (const location of identities.keys())
@@ -1204,9 +1360,12 @@ export function createBlankDocx(): Uint8Array {
   const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   const parts = {
     "[Content_Types].xml":
-      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
     "_rels/.rels":
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+    "word/_rels/document.xml.rels":
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>',
+    "word/settings.xml": `<w:settings xmlns:w="${w}"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`,
     "word/document.xml": `<w:document xmlns:w="${w}"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Tahoma"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t xml:space="preserve"></w:t></w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr></w:body></w:document>`,
   };
   return zipSync(
