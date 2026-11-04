@@ -751,9 +751,32 @@ button:hover:not(:disabled) {
   font-size: 9px;
   color: #8e9caf;
 }
-.outline-list button.active {
+.outline-list button.active,
+.search-results button.active {
   background: #f0f5fd;
   border-color: #b7cdeb;
+}
+::highlight(docx-search) {
+  background-color: #ffeb83;
+  color: #111;
+}
+::highlight(docx-search-active) {
+  background-color: #ffad42;
+  color: #111;
+}
+.search-options {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #d4dce8;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+.search-options legend {
+  font-size: 12px;
+}
+.advanced-search .field-row {
+  align-items: end;
 }
 .result-count {
   font-size: 10px;

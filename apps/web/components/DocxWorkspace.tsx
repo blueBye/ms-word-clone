@@ -18,9 +18,17 @@ import {
   textChange,
   download,
   selectionRanges,
-  literalMatches,
   changeCase,
+  restoreSelection,
 } from "../lib/editor";
+import {
+  searchMatches,
+  nextMatchIndex,
+  type SearchHit,
+  type SearchOptions,
+  type SearchDirection,
+} from "../lib/search";
+import { useSearchHighlights } from "./editor/useSearchHighlights";
 import { Ribbon, type RibbonTab } from "./editor/Ribbon";
 import { Tool } from "./editor/Controls";
 import { Icon } from "./editor/Icon";
@@ -72,7 +80,12 @@ export function DocxWorkspace() {
     [zoom, setZoom] = useState(1);
   const [query, setQuery] = useState(""),
     [replacement, setReplacement] = useState(""),
-    [matchCase, setMatchCase] = useState(false);
+    [searchOptions, setSearchOptions] = useState<SearchOptions>({});
+  const [activeHit, setActiveHit] = useState<SearchHit | null>(null);
+  const matchCase = !!searchOptions.matchCase;
+  const setMatchCase = (checked: boolean) =>
+    setSearchOptions((previous) => ({ ...previous, matchCase: checked }));
+  const findInput = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState(
     "Click on the page and type. Use Home to format your text.",
   );
@@ -131,11 +144,23 @@ export function DocxWorkspace() {
   const results = useMemo(() => {
     if (!query) return [];
     return all.flatMap((p) => {
-      const content = paragraphText(p),
-        hit = literalMatches(content, query, matchCase)[0];
-      return hit ? [{ id: p.id!, content, ...hit }] : [];
+      const content = paragraphText(p);
+      return searchMatches(content, query, searchOptions).map((hit) => ({
+        id: p.id!,
+        content,
+        ...hit,
+      }));
     });
-  }, [all, query, matchCase]);
+  }, [all, query, searchOptions]);
+  const searchVisible =
+    pane === "find" ||
+    pane === "replace" ||
+    homeDialog === "findDialog" ||
+    homeDialog === "replace";
+  useSearchHighlights(canvas, results, activeHit, searchVisible);
+  useEffect(() => {
+    if (pane === "find") findInput.current?.focus();
+  }, [pane]);
   const editor = usePageEditor({
     container: canvas,
     session,
@@ -198,6 +223,7 @@ export function DocxWorkspace() {
       setScope([]);
       setPainter(null);
       setHomeDialog(null);
+      setActiveHit(null);
       setNotice(
         next.lockedReason ??
           "Click on the page and type. Use Home to format your text.",
@@ -282,6 +308,11 @@ export function DocxWorkspace() {
         if (event.key.toLowerCase() === "f") {
           event.preventDefault();
           setPane("find");
+          findInput.current?.focus();
+        }
+        if (event.key.toLowerCase() === "h") {
+          event.preventDefault();
+          setHomeDialog("replace");
         }
         if (event.key.toLowerCase() === "o") {
           event.preventDefault();
@@ -326,6 +357,15 @@ export function DocxWorkspace() {
           event.preventDefault();
           void history("redo");
         }
+      }
+      if (
+        event.key === "F3" &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        event.preventDefault();
+        void findText(query, searchOptions, event.shiftKey ? "up" : "down");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -516,6 +556,52 @@ export function DocxWorkspace() {
       )
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+  function chooseSearchHit(hit: SearchHit) {
+    select(hit.id);
+    editor.select(hit);
+    setRange({ start: hit.start, end: hit.end });
+    setActiveHit(hit);
+    setScope([]);
+    const node = Array.from(
+      canvas.current?.querySelectorAll<HTMLElement>(
+        `[data-docx-page] [data-paragraph-id="${CSS.escape(hit.id)}"]`,
+      ) ?? [],
+    ).find((el) => el.getClientRects().length);
+    if (node) {
+      restoreSelection(node, hit.start, hit.end);
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+  async function findText(
+    value: string,
+    options: SearchOptions,
+    direction: SearchDirection = "down",
+  ) {
+    await editor.flush();
+    setQuery(value);
+    setSearchOptions(options);
+    const items = paragraphs(activeSession.current?.document ?? document);
+    const matches = items.flatMap((p) =>
+      searchMatches(paragraphText(p), value, options).map((hit) => ({
+        id: p.id!,
+        ...hit,
+      })),
+    );
+    const index = nextMatchIndex(
+      matches,
+      items.map((p) => p.id!),
+      editor.getSelection(),
+      direction,
+    );
+    if (index < 0) {
+      setActiveHit(null);
+      return "No results found.";
+    }
+    chooseSearchHit(matches[index]);
+    const message = `Result ${index + 1} of ${matches.length}.`;
+    setNotice(message);
+    return message;
+  }
   function activeRun(): RunFormat {
     const picked = editor.getSelection(),
       p = all.find((p) => p.id === (picked?.id ?? selectedId));
@@ -596,6 +682,7 @@ export function DocxWorkspace() {
     );
   }
   function para(format: ParagraphFormat) {
+    if (format.styleId) editor.setTyping({});
     void executeMany(
       targets().map((target) => ({ type: "paragraph", id: target.id, format })),
     );
@@ -680,7 +767,7 @@ export function DocxWorkspace() {
     if (name === "update") {
       const p = selected?.properties;
       const current = activeRun();
-      await execute({
+      const command: EditCommand = {
         type: "style",
         styleId: id,
         run: {
@@ -718,7 +805,21 @@ export function DocxWorkspace() {
                 : {}),
             }
           : undefined,
-      });
+      };
+      editor.setTyping({});
+      // The source paragraph should inherit its new definition on subsequent updates too.
+      await executeMany([
+        command,
+        ...(selected?.properties.styleId === id
+          ? [
+              {
+                type: "paragraph" as const,
+                id: selectedId,
+                format: { styleId: id },
+              },
+            ]
+          : []),
+      ]);
     } else if (name === "select") {
       const ranges = all
         .filter((p) => (p.properties.styleId ?? "Normal") === id)
@@ -740,6 +841,12 @@ export function DocxWorkspace() {
     }
     if (name === "clear") {
       run({ clear: true });
+      return;
+    }
+    if (name === "find") {
+      await editor.flush();
+      setPane("find");
+      findInput.current?.focus();
       return;
     }
     if (name.startsWith("list:")) {
@@ -959,37 +1066,58 @@ export function DocxWorkspace() {
   async function replaceText(
     find: string,
     value: string,
-    caseSensitive: boolean,
+    options: SearchOptions,
     allMatches: boolean,
   ) {
-    if (!find) return;
+    if (!find) return "Enter text to find.";
     setQuery(find);
     setReplacement(value);
-    setMatchCase(caseSensitive);
+    setSearchOptions(options);
     await editor.flush();
     const commands: EditCommand[] = [],
       active = activeSession.current;
+    const items = paragraphs(active?.document ?? document);
+    const selectedMatch = editor.getSelection();
     let skipped = 0;
-    for (const p of paragraphs(active?.document ?? document)) {
-      const matches = literalMatches(paragraphText(p), find, caseSensitive);
+    for (const p of items) {
+      const matches = searchMatches(paragraphText(p), find, options);
       if (!matches.length) continue;
       if (!active?.capability(p.id!).text) {
         skipped += matches.length;
         continue;
       }
-      const hits = allMatches ? matches : [matches[0]];
+      const hits = allMatches
+        ? matches
+        : matches.filter(
+            (hit) =>
+              selectedMatch &&
+              selectedMatch.id === p.id &&
+              hit.start === selectedMatch.start &&
+              hit.end === selectedMatch.end,
+          );
       for (const hit of [...hits].reverse())
         commands.push({ type: "text", id: p.id!, ...hit, text: value });
-      if (!allMatches) break;
+      if (!allMatches && hits.length) break;
     }
+    if (!allMatches && !commands.length) return findText(find, options);
     const done = await executeMany(commands);
-    setNotice(
-      done
-        ? `${commands.length} replacement(s). ${skipped ? `${skipped} protected match(es) skipped.` : ""}`
-        : commands.length
-          ? "Replacement could not be completed."
-          : "No editable matches found.",
-    );
+    const message = done
+      ? `${commands.length} replacement(s). ${skipped ? `${skipped} protected match(es) skipped.` : ""}`
+      : commands.length
+        ? "Replacement could not be completed."
+        : "No editable matches found.";
+    setActiveHit(null);
+    if (done && !allMatches) {
+      const command = commands[0] as Extract<EditCommand, { type: "text" }>;
+      editor.select({
+        id: command.id,
+        start: command.start + value.length,
+        end: command.start + value.length,
+      });
+      await findText(find, options);
+    }
+    setNotice(message);
+    return message;
   }
   function capturePageSelection() {
     if (!canvas.current) return;
@@ -1327,12 +1455,61 @@ export function DocxWorkspace() {
                   <label className="field">
                     Find
                     <input
+                      ref={findInput}
                       autoFocus
                       value={query}
-                      onChange={(e) => setQuery(e.target.value)}
+                      onChange={(e) => {
+                        setQuery(e.target.value);
+                        setActiveHit(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void findText(
+                            query,
+                            searchOptions,
+                            e.shiftKey ? "up" : "down",
+                          );
+                        }
+                      }}
                       placeholder="Search document text"
                     />
                   </label>
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={!!searchOptions.wholeWords}
+                      onChange={(e) =>
+                        setSearchOptions({
+                          ...searchOptions,
+                          wholeWords: e.target.checked,
+                        })
+                      }
+                    />
+                    Find whole words only
+                  </label>
+                  <div className="pane-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={!results.length}
+                      onClick={() => void findText(query, searchOptions, "up")}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={!results.length}
+                      onClick={() => void findText(query, searchOptions)}
+                    >
+                      Next
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => openHome("findDialog")}
+                    >
+                      Advanced Find…
+                    </button>
+                  </div>
                   <label className="check-field">
                     <input
                       type="checkbox"
@@ -1351,7 +1528,7 @@ export function DocxWorkspace() {
                         />
                       </label>
                       <p className="pane-description">
-                        Choose a result, then replace its first match.
+                        Choose a result, then replace the selected match.
                         Structured text stays locked.
                       </p>
                       <button
@@ -1361,51 +1538,48 @@ export function DocxWorkspace() {
                           !query ||
                           !canFormat ||
                           draftDirty ||
-                          !(
-                            matchCase ? text : text.toLocaleLowerCase()
-                          ).includes(
-                            matchCase ? query : query.toLocaleLowerCase(),
+                          !results.length
+                        }
+                        onClick={() =>
+                          void replaceText(
+                            query,
+                            replacement,
+                            searchOptions,
+                            false,
                           )
                         }
-                        onClick={() => {
-                          const start = (
-                            matchCase ? text : text.toLocaleLowerCase()
-                          ).indexOf(
-                            matchCase ? query : query.toLocaleLowerCase(),
-                          );
-                          void execute({
-                            type: "text",
-                            id: selectedId,
-                            start,
-                            end: start + query.length,
-                            text: replacement,
-                          });
-                        }}
                       >
-                        Replace in selected paragraph
+                        Replace
                       </button>
                     </>
                   )}
                   <p className="result-count">
                     {query
-                      ? `${results.length} matching paragraphs`
+                      ? `${results.length} results${results.length > 100 ? " (first 100 shown; Next reaches all results)" : ""}`
                       : "Search body text, tables, headers and footers."}
                   </p>
                   <div className="search-results">
                     {results.slice(0, 100).map((result, index) => (
                       <button
-                        key={result.id}
-                        onClick={() => {
-                          jump(result.id);
-                          setRange({ start: result.start, end: result.end });
-                        }}
+                        key={`${result.id}:${result.start}`}
+                        className={
+                          activeHit?.id === result.id &&
+                          activeHit.start === result.start
+                            ? "active"
+                            : ""
+                        }
+                        onClick={() => chooseSearchHit(result)}
                       >
                         <small>Result {index + 1}</small>
                         <span dir="auto">
                           {result.content.slice(
                             Math.max(0, result.start - 35),
-                            result.end + 90,
+                            result.start,
                           )}
+                          <mark>
+                            {result.content.slice(result.start, result.end)}
+                          </mark>
+                          {result.content.slice(result.end, result.end + 90)}
                         </span>
                       </button>
                     ))}
@@ -1639,17 +1813,13 @@ export function DocxWorkspace() {
         clipboard={clipboard}
         query={query}
         replacement={replacement}
+        options={searchOptions}
         onRun={run}
         onParagraph={para}
         onAction={(name) => void action(name)}
         onText={insertText}
         onCommand={homeCommand}
-        onFind={(value, caseSensitive) => {
-          setQuery(value);
-          setMatchCase(caseSensitive);
-          setHomeDialog(null);
-          setPane("find");
-        }}
+        onFind={findText}
         onReplace={replaceText}
         onSort={(count, descending, numeric) => {
           const start = all.findIndex((p) => p.id === selectedId);

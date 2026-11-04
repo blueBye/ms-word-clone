@@ -2,6 +2,7 @@ import type { DocxStyle, EditCommand } from "@local/docx-ir-engine";
 import { dialogData } from "./FontDialogs";
 import { StylePreview } from "./StylePreview";
 import { useState } from "react";
+import { styleFormCommand } from "../../lib/editor";
 
 export function StyleForm({
   style,
@@ -35,33 +36,15 @@ export function StyleForm({
       }}
       onSubmit={(event) => {
         const d = dialogData(event);
-        onApply({
-          type: "style",
-          styleId: style.id,
-          name: String(d.get("name")),
-          ...(!rename
+        onApply(
+          rename
             ? {
-                basedOn: String(d.get("basedOn")),
-                gallery: d.has("gallery"),
-                run: {
-                  fontFamily: String(d.get("font")),
-                  fontSizePt: Number(d.get("size")),
-                  bold: d.has("bold"),
-                  italic: d.has("italic"),
-                  color: String(d.get("color")),
-                },
-                paragraph: {
-                  alignment: String(d.get("align")) as
-                    | "left"
-                    | "center"
-                    | "right"
-                    | "justify",
-                  spaceBeforePt: Number(d.get("before")),
-                  spaceAfterPt: Number(d.get("after")),
-                },
+                type: "style",
+                styleId: style.id,
+                name: String(d.get("name")),
               }
-            : {}),
-        });
+            : styleFormCommand(style, d),
+        );
       }}
     >
       <label className="field">
@@ -144,6 +127,11 @@ export function StyleForm({
                 name="align"
                 defaultValue={style.paragraph.alignment ?? "left"}
               >
+                {["start", "end"].includes(style.paragraph.alignment ?? "") && (
+                  <option value={style.paragraph.alignment}>
+                    {style.paragraph.alignment}
+                  </option>
+                )}
                 {["left", "center", "right", "justify"].map((a) => (
                   <option key={a}>{a}</option>
                 ))}

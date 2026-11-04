@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type {
   Paragraph,
   ParagraphFormat,
@@ -14,8 +14,9 @@ import { EffectsGallery } from "./EffectsGallery";
 import { StyleForm } from "./StyleForm";
 import { StylePreview } from "./StylePreview";
 import { FontChooser, FontForm, Palette, dialogData } from "./FontDialogs";
+import { SearchForm, type SearchProps } from "./SearchForm";
 
-interface Props {
+interface Props extends SearchProps {
   dialog: string | null;
   onClose: () => void;
   onDialog: (name: string) => void;
@@ -28,20 +29,11 @@ interface Props {
   onStyleContext: (id: string, anchor: MenuAnchor) => void;
   onStyleAction: (name: string, id: string) => void;
   clipboard: string[];
-  query: string;
-  replacement: string;
   onRun: (format: RunFormat) => void;
   onParagraph: (format: ParagraphFormat) => void;
   onAction: (name: string) => void;
   onText: (text: string) => void;
   onCommand: (command: EditCommand) => void;
-  onFind: (query: string, matchCase: boolean) => void;
-  onReplace: (
-    query: string,
-    replacement: string,
-    matchCase: boolean,
-    all: boolean,
-  ) => Promise<void>;
   onSort: (count: number, descending: boolean, numeric: boolean) => void;
 }
 const titles: Record<string, string> = {
@@ -591,8 +583,10 @@ export function HomeDialogs(p: Props) {
         )}
         {(p.dialog === "replace" || p.dialog === "findDialog") && (
           <SearchForm
+            key={p.dialog}
             query={p.query}
             replacement={p.replacement}
+            options={p.options}
             replace={p.dialog === "replace"}
             onFind={p.onFind}
             onReplace={p.onReplace}
@@ -667,99 +661,6 @@ export function HomeDialogs(p: Props) {
     </HomeSurface>
   );
 }
-function SearchForm({
-  query,
-  replacement,
-  replace,
-  onFind,
-  onReplace,
-}: {
-  query: string;
-  replacement: string;
-  replace: boolean;
-  onFind: Props["onFind"];
-  onReplace: Props["onReplace"];
-}) {
-  const [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
-  const doReplace = async (form: HTMLFormElement, all: boolean) => {
-    const d = new FormData(form);
-    setBusy(true);
-    try {
-      await onReplace(
-        String(d.get("query")),
-        String(d.get("replacement")),
-        d.has("case"),
-        all,
-      );
-      setMessage(
-        "Replacement request processed. See document status for the result.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <form
-      onSubmit={(event) => {
-        const d = dialogData(event);
-        onFind(String(d.get("query")), d.has("case"));
-      }}
-    >
-      <label className="field">
-        Find what
-        <input name="query" defaultValue={query} required autoFocus />
-      </label>
-      {replace && (
-        <label className="field">
-          Replace with
-          <input name="replacement" defaultValue={replacement} />
-        </label>
-      )}
-      <label className="check-field">
-        <input name="case" type="checkbox" />
-        Match case
-      </label>
-      <p className="pane-description">
-        Literal text search includes mixed English/Persian text and ZWNJ.
-        Matches stay mapped to their original text.
-      </p>
-      <div className="dialog-actions">
-        <button className="secondary-button">Find</button>
-        {replace && (
-          <>
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy}
-              onClick={(event) =>
-                void doReplace(event.currentTarget.form!, false)
-              }
-            >
-              Replace
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              disabled={busy}
-              onClick={(event) =>
-                void doReplace(event.currentTarget.form!, true)
-              }
-            >
-              Replace All
-            </button>
-          </>
-        )}
-      </div>
-      {message && (
-        <p className="pane-description" role="status">
-          {message}
-        </p>
-      )}
-    </form>
-  );
-}
-
 const dropdowns = new Set([
   "paste",
   "fontFamily",

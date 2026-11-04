@@ -111,7 +111,7 @@ const builtins: Record<
   string,
   {
     name: string;
-    size: number;
+    size?: number;
     bold?: boolean;
     after?: number;
     before?: number;
@@ -119,7 +119,7 @@ const builtins: Record<
   }
 > = {
   Normal: { name: "Normal", size: 12, after: 8 },
-  NoSpacing: { name: "No Spacing", size: 12, after: 0 },
+  NoSpacing: { name: "No Spacing", after: 0 },
   Heading1: {
     name: "Heading 1",
     size: 20,
@@ -165,7 +165,7 @@ export async function readStyles(pkg: DocxPackage, main: string) {
         id,
         name: style.name,
         gallery: true,
-        run: { fontSizePt: style.size, bold: !!style.bold },
+        run: { fontSizePt: style.size ?? 12, bold: !!style.bold },
         paragraph: {
           spaceBeforePt: style.before ?? 0,
           spaceAfterPt: style.after ?? 0,
@@ -176,6 +176,20 @@ export async function readStyles(pkg: DocxPackage, main: string) {
   if (found && pkg.hasPart(found.target)) {
     const root = parseXml(await pkg.readText(found.target)).documentElement!;
     const resolver = new Styles(root, theme, () => {});
+    const normal = resolver.paragraph({}).run;
+    for (const [id, preset] of Object.entries(builtins)) {
+      const style = result.get(id)!;
+      style.run = {
+        ...normal,
+        ...(preset.size !== undefined ? { fontSizePt: preset.size } : {}),
+        ...(preset.bold ? { bold: true } : {}),
+        complexScript: {
+          ...normal.complexScript,
+          ...(preset.size !== undefined ? { fontSizePt: preset.size } : {}),
+          ...(preset.bold ? { bold: true } : {}),
+        },
+      };
+    }
     for (const style of childElements(root).filter(
       (e) => isWord(e, "style") && wordAttribute(e, "type") === "paragraph",
     )) {
@@ -380,8 +394,10 @@ export async function ensureStyle(
     val(r, "b", "1");
     val(r, "bCs", "1");
   }
-  val(r, "sz", preset.size * 2);
-  val(r, "szCs", preset.size * 2);
+  if (preset.size !== undefined) {
+    val(r, "sz", preset.size * 2);
+    val(r, "szCs", preset.size * 2);
+  }
   changes.set(path, serialize(root));
   if (
     id !== "Normal" &&
