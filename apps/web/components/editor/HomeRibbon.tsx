@@ -323,8 +323,22 @@ interface Props {
 }
 export function HomeRibbon(p: Props) {
   const trigger = useRef<HTMLElement | null>(null);
-  const open = (name: string) =>
-    p.onDialog(name, trigger.current?.getBoundingClientRect());
+  const open = (name: string) => {
+    const element = trigger.current;
+    const rect = element?.getBoundingClientRect();
+    p.onDialog(
+      name,
+      rect
+        ? {
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom,
+            element: element!,
+          }
+        : undefined,
+    );
+  };
   const disabled = p.disabled || !p.canFormat,
     paragraphDisabled = p.disabled || !p.selected,
     format = p.format;

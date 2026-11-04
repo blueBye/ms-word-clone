@@ -1,12 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { menuPosition, type MenuBounds } from "../../lib/menu-position";
 
-export type MenuAnchor = {
-  left: number;
-  top: number;
-  bottom: number;
-  right: number;
-};
+export type MenuAnchor = MenuBounds & { element?: HTMLElement };
 export function MenuBranch({
   label,
   children,
@@ -106,23 +102,31 @@ export function HomeMenu({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: 8, top: 190 });
+  const [position, setPosition] = useState({
+    left: anchor?.left ?? 8,
+    top: (anchor?.bottom ?? 0) + 2,
+    maxHeight: 0,
+    clipped: false,
+  });
   const close = useRef(onClose);
   close.current = onClose;
   useLayoutEffect(() => {
     const el = ref.current!;
+    if (!anchor) {
+      close.current();
+      return;
+    }
+    // The native top layer keeps the menu above the document without a modal backdrop.
+    el.showPopover?.();
     const place = () => {
-      const rect = el.getBoundingClientRect(),
-        a = anchor ?? { left: 8, right: 8, top: 190, bottom: 190 };
-      const left = Math.max(8, Math.min(a.left, innerWidth - rect.width - 8));
-      const top =
-        a.bottom + rect.height < innerHeight - 8
-          ? a.bottom + 2
-          : Math.max(
-              8,
-              Math.min(a.top - rect.height - 2, innerHeight - rect.height - 8),
-            );
-      setPosition({ left, top });
+      const a = anchor.element?.getBoundingClientRect() ?? anchor;
+      setPosition(
+        menuPosition(
+          a,
+          { width: el.getBoundingClientRect().width, height: el.scrollHeight },
+          { width: innerWidth, height: innerHeight },
+        ),
+      );
     };
     place();
     const observer = new ResizeObserver(place);
@@ -132,24 +136,50 @@ export function HomeMenu({
     };
     window.addEventListener("pointerdown", outside, true);
     window.addEventListener("resize", place);
+    const scroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !el.contains(event.target))
+        place();
+    };
+    window.addEventListener("scroll", scroll, true);
     // Focus belongs to the menu while it is open; the model selection is retained separately.
     el.querySelector<HTMLElement>(
       "input:not(:disabled),button:not(:disabled)",
-    )?.focus();
+    )?.focus({ preventScroll: true });
     return () => {
       observer.disconnect();
       window.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", scroll, true);
+      if (
+        el.isConnected &&
+        typeof el.hidePopover === "function" &&
+        el.matches(":popover-open")
+      )
+        el.hidePopover();
     };
   }, [anchor]);
   return createPortal(
     <div
       ref={ref}
+      popover="manual"
       role="menu"
       aria-label={label}
       data-home-menu-root
       className="home-dropdown"
-      style={position}
+      style={{
+        position: "fixed",
+        inset: "auto",
+        margin: 0,
+        padding: 0,
+        width: "max-content",
+        maxWidth: "min(560px, calc(100vw - 16px))",
+        zIndex: 1000,
+        left: position.left,
+        top: position.top,
+        maxHeight: position.maxHeight || undefined,
+        overflowY: position.clipped ? "auto" : "visible",
+        overflowX: position.clipped ? "hidden" : "visible",
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();

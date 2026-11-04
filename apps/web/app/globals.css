@@ -1780,6 +1780,10 @@ button:hover:not(:disabled) {
 /* Home galleries mirror the ribbon: compact anchored choices, dialogs for detailed settings. */
 .home-dropdown {
   position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  width: max-content;
   z-index: 500;
   min-width: 205px;
   max-width: min(560px, calc(100vw - 16px));
@@ -1993,7 +1997,8 @@ button:hover:not(:disabled) {
   overflow-y: auto;
 }
 .home-dropdown .home-styles-list {
-  grid-template-columns: repeat(3, 150px);
+  grid-template-columns: repeat(3, minmax(0, 150px));
+  max-width: calc(100vw - 32px);
   gap: 2px;
   padding: 4px;
   max-height: 55vh;
