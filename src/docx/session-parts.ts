@@ -299,13 +299,18 @@ export async function editStyle(
     for (const [key, tag] of [
       ["bold", "bCs"],
       ["italic", "iCs"],
-    ] as const)
-      if (command.run[key] !== undefined)
+    ] as const) {
+      const value =
+        command.run[
+          key === "bold" ? "complexScriptBold" : "complexScriptItalic"
+        ] ?? command.run[key];
+      if (value !== undefined)
         val(
           replacement,
           tag,
-          command.run[key] !== !!base.complexScript?.[key] ? "1" : "0",
+          value !== !!base.complexScript?.[key] ? "1" : "0",
         );
+    }
     if (original) style.replaceChild(replacement, original);
     else style.appendChild(replacement);
   }

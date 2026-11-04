@@ -610,7 +610,9 @@ export function DocxWorkspace() {
     const current =
       runs.find((r) => {
         offset += r.text.length;
-        return offset >= (picked?.start ?? 0);
+        return picked && picked.end > picked.start
+          ? offset > picked.start
+          : offset >= (picked?.start ?? 0);
       })?.properties ?? p?.markProperties;
     const char = p
       ? paragraphText(p).slice(
@@ -765,61 +767,27 @@ export function DocxWorkspace() {
   }
   async function styleAction(name: string, id: string) {
     if (name === "update") {
-      const p = selected?.properties;
-      const current = activeRun();
-      const command: EditCommand = {
-        type: "style",
+      const picked = editor.getSelection();
+      if (!picked) {
+        setNotice(
+          "Select the text whose formatting you want the style to use.",
+        );
+        return;
+      }
+      const before = activeSession.current?.document;
+      const done = await execute({
+        type: "updateStyleFromSelection",
         styleId: id,
-        run: {
-          ...current,
-          bold: !!current.bold,
-          italic: !!current.italic,
-          strike: !!current.strike,
-          caps: !!current.caps,
-          smallCaps: !!current.smallCaps,
-          underline: current.underline ?? "none",
-          hidden: !!current.hidden,
-          fontFamily: current.fontFamily ?? "Calibri",
-          fontSizePt: current.fontSizePt ?? 12,
-          color: current.color ?? "auto",
-          letterSpacingPt: current.letterSpacingPt ?? 0,
-          positionPt: current.positionPt ?? 0,
-          textOutline: current.textOutline ?? null,
-          textShadow: current.textShadow ?? null,
-          glow: current.glow ?? null,
-          reflection: current.reflection ?? null,
-        },
-        paragraph: p
-          ? {
-              alignment: p.alignment as ParagraphFormat["alignment"],
-              direction: p.direction,
-              spaceBeforePt: p.spaceBeforePt ?? 0,
-              spaceAfterPt: p.spaceAfterPt ?? 0,
-              indentStartPt: p.indentStartPt ?? p.indentLeftPt ?? 0,
-              indentEndPt: p.indentEndPt ?? p.indentRightPt ?? 0,
-              firstLinePt: p.firstLinePt ?? 0,
-              keepNext: p.keepNext ?? false,
-              keepLines: p.keepLines ?? false,
-              ...(p.lineSpacing?.rule === "auto"
-                ? { lineSpacing: p.lineSpacing.value }
-                : {}),
-            }
-          : undefined,
-      };
-      editor.setTyping({});
-      // The source paragraph should inherit its new definition on subsequent updates too.
-      await executeMany([
-        command,
-        ...(selected?.properties.styleId === id
-          ? [
-              {
-                type: "paragraph" as const,
-                id: selectedId,
-                format: { styleId: id },
-              },
-            ]
-          : []),
-      ]);
+        ...picked,
+      });
+      if (done) {
+        editor.setTyping({});
+        setNotice(
+          activeSession.current?.document === before
+            ? "No common formatting changes were found in the selection."
+            : "Style updated from the selected text. Other text using the style now follows it.",
+        );
+      }
     } else if (name === "select") {
       const ranges = all
         .filter((p) => (p.properties.styleId ?? "Normal") === id)

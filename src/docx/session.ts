@@ -29,6 +29,7 @@ import {
   editStyle,
 } from "./session-parts.js";
 import { writeTextEffects, W14 } from "./text-effects.js";
+import { selectionStyleDelta } from "./style-selection.js";
 
 export interface DocxStyle {
   id: string;
@@ -74,6 +75,8 @@ export interface RunFormat {
   positionPt?: number;
   complexScriptFont?: string;
   complexScriptSizePt?: number;
+  complexScriptBold?: boolean;
+  complexScriptItalic?: boolean;
 }
 export interface ParagraphFormat {
   direction?: "rtl" | "ltr";
@@ -104,6 +107,13 @@ export type EditCommand =
   | { type: "clearRun"; id: string; start?: number; end?: number }
   | { type: "splitParagraph"; id: string; start: number; end: number }
   | { type: "joinParagraph"; id: string; direction: "backward" | "forward" }
+  | {
+      type: "updateStyleFromSelection";
+      id: string;
+      styleId: string;
+      start: number;
+      end: number;
+    }
   | {
       type: "list";
       id: string;
@@ -436,6 +446,12 @@ function setRun(run: Element, format: RunFormat, inheritedColor?: string) {
     if (format[key] !== undefined)
       for (const tag of tags) prop(pr, tag, format[key] ? "1" : "0", rOrder);
   for (const [key, tag] of [
+    ["complexScriptBold", "bCs"],
+    ["complexScriptItalic", "iCs"],
+  ] as const)
+    if (format[key] !== undefined)
+      prop(pr, tag, format[key] ? "1" : "0", rOrder);
+  for (const [key, tag] of [
     ["caps", "caps"],
     ["smallCaps", "smallCaps"],
     ["hidden", "vanish"],
@@ -677,6 +693,7 @@ function rewriteText(
   p: Element,
   command: Extract<EditCommand, { type: "text" | "run" | "clearRun" }>,
   effective?: Paragraph,
+  inherit?: RunFormat,
 ) {
   const text = textContent(p);
   const start = command.start ?? 0,
@@ -719,7 +736,7 @@ function rewriteText(
           value.slice(cuts[i] - offset, cuts[i + 1] - offset),
         );
         if (cuts[i] >= start && cuts[i + 1] <= end) {
-          if (command.type === "clearRun") clearRun(item);
+          if (command.type === "clearRun") clearRun(item, inherit);
           else setRun(item, command.format, colorAt(cuts[i]));
         }
         output.push(item);
@@ -727,7 +744,7 @@ function rewriteText(
       if (!value.length) {
         const item = run.cloneNode(true) as Element;
         if (start === 0 && end === text.length) {
-          if (command.type === "clearRun") clearRun(item);
+          if (command.type === "clearRun") clearRun(item, inherit);
           else setRun(item, command.format, colorAt(offset));
         }
         output.push(item);
@@ -770,8 +787,62 @@ function rewriteText(
   for (const run of runs) p.removeChild(run);
   for (const run of output) p.appendChild(run);
 }
-function clearRun(run: Element) {
+function clearRun(run: Element, inherit?: RunFormat) {
   const pr = childWord(run, "rPr");
+  if (inherit && pr) {
+    const tags: Partial<Record<keyof RunFormat, string[]>> = {
+      color: ["color", "textFill"],
+      fontFamily: ["rFonts"],
+      complexScriptFont: ["rFonts"],
+      fontSizePt: ["sz"],
+      complexScriptSizePt: ["szCs"],
+      bold: ["b"],
+      italic: ["i"],
+      complexScriptBold: ["bCs"],
+      complexScriptItalic: ["iCs"],
+      underline: ["u"],
+      strike: ["strike"],
+      caps: ["caps"],
+      smallCaps: ["smallCaps"],
+      hidden: ["vanish"],
+      verticalAlign: ["vertAlign"],
+      letterSpacingPt: ["spacing"],
+      positionPt: ["position"],
+      textOutline: ["textOutline"],
+      textShadow: ["shadow"],
+      glow: ["glow"],
+      reflection: ["reflection"],
+      ligatures: ["ligatures"],
+      numberForm: ["numForm"],
+      numberSpacing: ["numSpacing"],
+      stylisticSets: ["stylisticSets"],
+    };
+    const managed = new Set(
+      Object.keys(inherit).flatMap((key) => tags[key as keyof RunFormat] ?? []),
+    );
+    for (const node of childElements(pr)) {
+      if (isWord(node, "rFonts") && managed.has("rFonts")) {
+        const channels = [
+          ...(inherit.fontFamily !== undefined
+            ? ["ascii", "hAnsi", "eastAsia"]
+            : []),
+          ...(inherit.complexScriptFont !== undefined ? ["cs"] : []),
+        ];
+        for (const slot of channels) {
+          node.removeAttributeNS(node.namespaceURI, slot);
+          node.removeAttributeNS(
+            node.namespaceURI,
+            slot === "cs" ? "cstheme" : `${slot}Theme`,
+          );
+        }
+      } else if (
+        managed.has(node.localName!) &&
+        (isWord(node, node.localName!) || node.namespaceURI === W14)
+      )
+        pr.removeChild(node);
+    }
+    return;
+  }
   if (pr)
     for (const child of childElements(pr))
       if (
@@ -1063,6 +1134,49 @@ export async function openDocxSession(
       );
       for (const el of sorted) parent.insertBefore(el, marker);
       parent.removeChild(marker);
+    } else if (command.type === "updateStyleFromSelection") {
+      const allowed = capability(command.id);
+      if (!allowed.format) throw new Error(allowed.reason);
+      range(textContent(p!), command.start, command.end);
+      const style = (await readStyles(overlay(updated), main)).find(
+        (s) => s.id === command.styleId,
+      );
+      if (!style)
+        throw new Error("The selected style does not exist in this document.");
+      const delta = selectionStyleDelta(
+        source!.paragraph,
+        command.start,
+        command.end,
+        style,
+      );
+      if (!Object.keys(delta.run).length) return document!;
+      await editStyle(
+        {
+          type: "style",
+          styleId: command.styleId,
+          run: delta.run,
+        },
+        updated,
+        overlay(updated),
+        main,
+        setRun,
+        setParagraph,
+      );
+      if (
+        source!.paragraph.properties.styleId === command.styleId &&
+        Object.keys(delta.inherit).length
+      )
+        rewriteText(
+          p!,
+          { type: "clearRun", id: command.id, ...delta.range },
+          source!.paragraph,
+          delta.inherit,
+        );
+      nextSelection = {
+        id: command.id,
+        start: command.start,
+        end: command.end,
+      };
     } else if (command.type === "style") {
       await editStyle(
         command,
