@@ -1,4 +1,4 @@
-import type { DocxStyle, EditCommand } from "@local/docx-ir-engine";
+import type { DocumentStyle, EditCommand } from "@local/docx-ir-engine/core";
 import { dialogData } from "./FontDialogs";
 import { StylePreview } from "./StylePreview";
 import { useState } from "react";
@@ -10,8 +10,8 @@ export function StyleForm({
   rename = false,
   onApply,
 }: {
-  style: DocxStyle;
-  styles: DocxStyle[];
+  style: DocumentStyle;
+  styles: DocumentStyle[];
   rename?: boolean;
   onApply: (command: EditCommand) => void;
 }) {

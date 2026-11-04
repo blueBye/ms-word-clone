@@ -3,8 +3,8 @@ import type {
   Paragraph,
   ParagraphFormat,
   RunFormat,
-  DocxStyle,
-} from "@local/docx-ir-engine";
+  DocumentStyle,
+} from "@local/docx-ir-engine/core";
 import { Group } from "./Controls";
 import { Icon } from "./Icon";
 import { StylePreview } from "./StylePreview";
@@ -312,7 +312,7 @@ interface Props {
   disabled: boolean;
   canFormat: boolean;
   hasSelection: boolean;
-  styles: DocxStyle[];
+  styles: DocumentStyle[];
   showMarks: boolean;
   painter: boolean;
   onRun: (format: RunFormat) => void;

@@ -1,6 +1,6 @@
 # Home editing status
 
-The Next.js Home ribbon uses the portable `DocxSession` commands. Documents remain local. The editing session retains original package parts and unknown XML rather than rebuilding the file from the preview IR. Unsupported structured paragraphs are read-only for text/run edits.
+The Next.js Home ribbon uses the portable `DocumentSession` command contract. The core manages state and styles; the OOXML adapter retains original package parts and unknown XML rather than rebuilding the file from the preview IR. Common edits queue compatibility writes until export or structural reconciliation. Documents remain local. Unsupported structured paragraphs are read-only for text/run edits. See the [architecture review](engine-architecture.md).
 
 ## Current controls
 

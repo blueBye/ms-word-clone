@@ -1,4 +1,4 @@
-import type { DocumentIR, Paragraph, ParagraphFormat, RunFormat } from '@local/docx-ir-engine';
+import type { DocumentIR, Paragraph, ParagraphFormat, RunFormat } from '@local/docx-ir-engine/core';
 import { Group, Menu, MenuItem, Tool } from './Controls';
 
 export type RibbonTab='Home'|'Insert'|'Layout';

@@ -1,12 +1,12 @@
 import type { Paragraph, RunProperties } from "../model/document.js";
-import type { DocxStyle, RunFormat } from "./session.js";
+import type { DocumentStyle, RunFormat } from "./types.js";
 
 /** Build a style delta from the actual selected runs, without flattening script-specific defaults. */
 export function selectionStyleDelta(
   p: Paragraph,
   start: number,
   end: number,
-  style: DocxStyle,
+  style: DocumentStyle,
 ) {
   let offset = 0;
   let caretRange = { start, end };

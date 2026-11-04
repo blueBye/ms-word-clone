@@ -6,6 +6,14 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./docx": {
+      "types": "./dist/docx/index.d.ts",
+      "import": "./dist/docx/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -30,11 +38,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@electric-sql/d2ts": "0.1.8",
     "@xmldom/xmldom": "^0.9.8",
     "fflate": "^0.8.2"
   },
   "peerDependencies": {
     "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

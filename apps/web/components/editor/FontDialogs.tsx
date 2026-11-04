@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import type { RunFormat } from "@local/docx-ir-engine";
+import type { RunFormat } from "@local/docx-ir-engine/core";
 export function dialogData(event: FormEvent<HTMLFormElement>) {
   event.preventDefault();
   return new FormData(event.currentTarget);

@@ -1,6 +1,6 @@
 # DOCX engine and Next.js workspace
 
-A browser-compatible TypeScript DOCX importer, portable document IR, and React preview renderer, with a Next.js host application. It includes table-based documents, inherited formatting, RTL/LTR typography, direct paragraph editing, and a source-retaining DOCX editing session. Editing is restricted to supported content; this is not full Word compatibility.
+A portable TypeScript document engine, an OOXML compatibility adapter, and a React rendering layer, with a Next.js host application. The core manages document state, styles, text, history and incremental dependencies using d2ts. The Word adapter retains original source parts for compatible editing/export. Editing is restricted to supported content; this is not full Word compatibility.
 
 ## Run the Next.js app
 
@@ -24,9 +24,11 @@ The preview supports tables, merged cells, lists, inherited styles, image opacit
 | `pnpm typecheck`    | Check the engine and app types                      |
 | `pnpm test`         | Run engine and sample-integration tests             |
 
-The application lives in `apps/web/`; the engine remains in `src/`. The app imports `@local/docx-ir-engine` and `@local/docx-ir-engine/react` through a workspace dependency, without reaching into private source files. Rebuild with `pnpm build:engine` after changing engine source while the app is running. Regenerate the sample using `node scripts/create-sample.mjs`.
+The application lives in `apps/web/`; the engine remains in `src/`. The workspace uses public `/core`, `/docx`, and `/react` package entries without reaching into private source files. The core runs without React or XML. Rebuild with `pnpm build:engine` after changing engine source while the app is running. Regenerate the sample using `node scripts/create-sample.mjs`.
 
 ## Review and roadmap
+
+The [current architecture review](docs/engine-architecture.md) documents the core/OOXML/UI boundaries, d2ts integration, performance evidence, preservation behavior and remaining work. Run `node scripts/benchmark-engine.mjs` after building to reproduce the core benchmark.
 
 The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. The [Home implementation status](docs/home-editor-status.md) records the current working controls and remaining gaps.
 
@@ -40,12 +42,13 @@ The build now uses the xmldom 0.9 callback API and DOM types. Synthetic/componen
 2. Build only the engine with `pnpm build:engine`.
 3. Install from the package directory: `npm install ./packages/docx-ir-engine` (or use your preferred workspace tooling).
 
-The ZIP includes TypeScript source but not `node_modules`. Build dependencies: `fflate`, `@xmldom/xmldom`; peer dependency: `react >=18`.
+The ZIP includes TypeScript source but not `node_modules`. Runtime dependencies: `@electric-sql/d2ts`, `fflate`, `@xmldom/xmldom`. React is an optional peer required by the `/react` entry.
 
 ```tsx
 "use client";
 import { useState } from "react";
-import { importDocx, type DocumentIR } from "@local/docx-ir-engine";
+import { importDocx } from "@local/docx-ir-engine/docx";
+import type { DocumentIR } from "@local/docx-ir-engine/core";
 import { DocumentRenderer } from "@local/docx-ir-engine/react";
 
 export default function DocxPreview() {

@@ -1,4 +1,4 @@
-import type { DocumentIR } from '@local/docx-ir-engine';
+import type { DocumentIR } from '@local/docx-ir-engine/core';
 import { Icon } from './Icon';
 
 interface Props {

@@ -233,7 +233,9 @@ it("does not spread an RTL paragraph's layout when the caret is in recolored tex
 });
 
 it("keeps the shipped sample's English paragraphs LTR when Normal is updated from Persian text, including repeated updates", async () => {
-  const bytes = await readFile(new URL("../apps/web/public/sample.docx", import.meta.url));
+  const bytes = await readFile(
+    new URL("../apps/web/public/sample.docx", import.meta.url),
+  );
   const s = await openDocxSession(bytes);
   const original = getParagraphs(s.document.blocks);
   const originalProperties = original.map((p) => p.properties);
@@ -242,18 +244,54 @@ it("keeps the shipped sample's English paragraphs LTR when Normal is updated fro
   expect(original[1].properties.direction).not.toBe("rtl");
 
   // Merely placing the caret in the Persian paragraph must not redefine Normal as RTL.
-  await s.execute({ type: "updateStyleFromSelection", id, styleId: "Normal", start: 1, end: 1 });
-  expect(await s.exportDocx()).toEqual(bytes);
+  await s.execute({
+    type: "updateStyleFromSelection",
+    id,
+    styleId: "Normal",
+    start: 1,
+    end: 1,
+  });
+  expect(await s.exportDocx()).toEqual(new Uint8Array(bytes));
 
-  await s.execute({ type: "run", id, start: 0, end: 3, format: { color: "#CC2200" } });
-  await s.execute({ type: "updateStyleFromSelection", id, styleId: "Normal", start: 0, end: 3 });
+  await s.execute({
+    type: "run",
+    id,
+    start: 0,
+    end: 3,
+    format: { color: "#CC2200" },
+  });
+  await s.execute({
+    type: "updateStyleFromSelection",
+    id,
+    styleId: "Normal",
+    start: 0,
+    end: 3,
+  });
   const afterColor = await s.exportDocx();
   // Both a caret and a text selection remain no-ops once the color matches.
-  await s.execute({ type: "updateStyleFromSelection", id, styleId: "Normal", start: 1, end: 1 });
-  await s.execute({ type: "updateStyleFromSelection", id, styleId: "Normal", start: 0, end: 3 });
+  await s.execute({
+    type: "updateStyleFromSelection",
+    id,
+    styleId: "Normal",
+    start: 1,
+    end: 1,
+  });
+  await s.execute({
+    type: "updateStyleFromSelection",
+    id,
+    styleId: "Normal",
+    start: 0,
+    end: 3,
+  });
   expect(await s.exportDocx()).toEqual(afterColor);
-  expect(getParagraphs(s.document.blocks).map((p) => p.properties)).toEqual(originalProperties);
-  expect(getParagraphs((await importDocx(afterColor)).blocks).map((p) => p.properties)).toEqual(originalProperties);
+  expect(getParagraphs(s.document.blocks).map((p) => p.properties)).toEqual(
+    originalProperties,
+  );
+  expect(
+    getParagraphs((await importDocx(afterColor)).blocks).map(
+      (p) => p.properties,
+    ),
+  ).toEqual(originalProperties);
   const normal = (await s.styles()).find((style) => style.id === "Normal")!;
   expect(normal.run.color).toBe("#CC2200");
   expect(normal.paragraph.direction).toBeUndefined();

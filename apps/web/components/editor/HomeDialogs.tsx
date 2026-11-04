@@ -4,8 +4,8 @@ import type {
   ParagraphFormat,
   RunFormat,
   EditCommand,
-  DocxStyle,
-} from "@local/docx-ir-engine";
+  DocumentStyle,
+} from "@local/docx-ir-engine/core";
 import { Dialog } from "./Controls";
 import { HomeIcon } from "./HomeRibbon";
 import { HomeMenu, type MenuAnchor } from "./HomeMenu";
@@ -23,7 +23,7 @@ interface Props extends SearchProps {
   selected?: Paragraph;
   format: RunFormat;
   families: string[];
-  styles: DocxStyle[];
+  styles: DocumentStyle[];
   anchor: MenuAnchor | null;
   contextStyle: string;
   onStyleContext: (id: string, anchor: MenuAnchor) => void;

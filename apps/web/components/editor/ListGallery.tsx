@@ -1,4 +1,4 @@
-import type { EditCommand, Paragraph } from "@local/docx-ir-engine";
+import type { EditCommand, Paragraph } from "@local/docx-ir-engine/core";
 import { MenuBranch } from "./HomeMenu";
 import { dialogData } from "./FontDialogs";
 

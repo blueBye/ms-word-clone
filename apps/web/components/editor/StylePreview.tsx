@@ -1,11 +1,11 @@
-import type { DocxStyle } from "@local/docx-ir-engine";
+import type { DocumentStyle } from "@local/docx-ir-engine/core";
 import { textEffectsStyle } from "@local/docx-ir-engine/react";
 
 export function StylePreview({
   style,
   compact = false,
 }: {
-  style: DocxStyle;
+  style: DocumentStyle;
   compact?: boolean;
 }) {
   const r = style.run;

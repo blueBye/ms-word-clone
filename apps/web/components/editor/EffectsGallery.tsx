@@ -1,4 +1,4 @@
-import type { RunFormat } from "@local/docx-ir-engine";
+import type { RunFormat } from "@local/docx-ir-engine/core";
 import { textEffectsStyle } from "@local/docx-ir-engine/react";
 import { MenuBranch } from "./HomeMenu";
 import { Palette } from "./FontDialogs";

@@ -1,5 +1,7 @@
 # DOCX engine review
 
+For the current document-core separation, d2ts integration and source-preserving adapter lifecycle, see the [2026-11-05 architecture review](engine-architecture.md). The assessment below is historical.
+
 Historical baseline review: the subsequent 0.2 sample-driven pass implements several findings below. See [current support](compatibility.md) and [four-document results](sample-compatibility.md) for the updated state; unresolved preservation/export and visual-layout limits remain tracked.
 
 Review date: 2026-10-31. Scope: every source module, package exports, TypeScript configuration, dependency lockfile, README and existing tests. This is a source review and a synthetic-fixture assessment, not certification against the entire OOXML schema or Microsoft Word's layout engine.

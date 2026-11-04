@@ -2,11 +2,11 @@ import {
   getParagraphs,
   type DocumentIR,
   type Paragraph,
-  type DocxStyle,
+  type DocumentStyle,
   type EditCommand,
   type RunFormat,
   type ParagraphFormat,
-} from "@local/docx-ir-engine";
+} from "@local/docx-ir-engine/core";
 
 export function paragraphs(document: DocumentIR | null): Paragraph[] {
   if (!document) return [];
@@ -31,7 +31,7 @@ export function paragraphText(p: Paragraph) {
 
 /** Write only edited fields so inherited settings remain linked to the base style. */
 export function styleFormCommand(
-  style: DocxStyle,
+  style: DocumentStyle,
   data: FormData,
 ): EditCommand {
   const run: RunFormat = {
@@ -296,31 +296,4 @@ export function selectionRanges(
   }));
 }
 
-export function changeCase(text: string, mode: string, locale?: string) {
-  if (mode === "upper") return text.toLocaleUpperCase(locale);
-  if (mode === "lower") return text.toLocaleLowerCase(locale);
-  if (mode === "toggle")
-    return Array.from(text, (c) =>
-      c === c.toLocaleUpperCase(locale)
-        ? c.toLocaleLowerCase(locale)
-        : c.toLocaleUpperCase(locale),
-    ).join("");
-  if (mode === "title")
-    return Array.from(
-      new Intl.Segmenter(locale, { granularity: "word" }).segment(text),
-      (part) =>
-        part.isWordLike
-          ? part.segment[0].toLocaleUpperCase(locale) +
-            part.segment.slice(1).toLocaleLowerCase(locale)
-          : part.segment,
-    ).join("");
-  if (mode === "sentence")
-    return text
-      .toLocaleLowerCase(locale)
-      .replace(
-        /(^|[.!?؟]\s+)(\p{L})/gu,
-        (_, prefix: string, letter: string) =>
-          prefix + letter.toLocaleUpperCase(locale),
-      );
-  return text;
-}
+export { changeCase } from "@local/docx-ir-engine/core";

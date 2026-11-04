@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DocumentIR } from '@local/docx-ir-engine';
+import type { DocumentIR } from '@local/docx-ir-engine/core';
 import { getRequiredFonts, type FontRequirement } from '@local/docx-ir-engine/react';
 
 export function useDocumentFonts(document: DocumentIR | null) {

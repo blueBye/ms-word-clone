@@ -1,3 +1,4 @@
+import { builtins } from "../core/style-presets.js";
 import { XMLSerializer, type Element } from "@xmldom/xmldom";
 import type { DocxPackage } from "./package.js";
 import type {
@@ -107,46 +108,6 @@ async function related(
   };
 }
 
-const builtins: Record<
-  string,
-  {
-    name: string;
-    size?: number;
-    bold?: boolean;
-    after?: number;
-    before?: number;
-    outline?: number;
-  }
-> = {
-  Normal: { name: "Normal", size: 12, after: 8 },
-  NoSpacing: { name: "No Spacing", after: 0 },
-  Heading1: {
-    name: "Heading 1",
-    size: 20,
-    bold: true,
-    before: 12,
-    after: 6,
-    outline: 0,
-  },
-  Heading2: {
-    name: "Heading 2",
-    size: 16,
-    bold: true,
-    before: 10,
-    after: 4,
-    outline: 1,
-  },
-  Heading3: {
-    name: "Heading 3",
-    size: 14,
-    bold: true,
-    before: 8,
-    after: 4,
-    outline: 2,
-  },
-  Title: { name: "Title", size: 28, after: 12 },
-  Subtitle: { name: "Subtitle", size: 16, after: 8 },
-};
 export async function readStyles(pkg: DocxPackage, main: string) {
   const rels = await readRelationships(pkg, main),
     found = [...rels.values()].find((r) => r.type === "styles" && !r.external);
@@ -386,7 +347,15 @@ export async function ensureStyle(
   root.appendChild(style);
   val(style, "name", preset.name);
   if (id !== "Normal") val(style, "basedOn", "Normal");
-  else value(style, "default", "1");
+  else if (
+    !childElements(root).some(
+      (e) =>
+        isWord(e, "style") &&
+        wordAttribute(e, "type") === "paragraph" &&
+        ["1", "true"].includes(wordAttribute(e, "default") ?? ""),
+    )
+  )
+    value(style, "default", "1");
   val(style, "qFormat", "1");
   const p = child(style, "pPr");
   if (preset.outline !== undefined) val(p, "keepNext", "1");

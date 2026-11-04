@@ -2,15 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  openDocxSession,
-  createBlankDocx,
-  type DocxSession,
-  type DocxStyle,
+  type DocumentStyle,
   type DocumentIR,
   type EditCommand,
   type ParagraphFormat,
   type RunFormat,
-} from "@local/docx-ir-engine";
+} from "@local/docx-ir-engine/core";
+import {
+  openDocxSession,
+  createBlankDocx,
+  type DocxSession,
+} from "@local/docx-ir-engine/docx";
 import { PaginatedDocument } from "@local/docx-ir-engine/react";
 import {
   paragraphs,
@@ -99,7 +101,7 @@ export function DocxWorkspace() {
     color: "#c42b1c",
   });
   const [homeDialog, setHomeDialog] = useState<string | null>(null),
-    [styleList, setStyleList] = useState<DocxStyle[]>([]);
+    [styleList, setStyleList] = useState<DocumentStyle[]>([]);
   const [homeAnchor, setHomeAnchor] = useState<MenuAnchor | null>(null),
     [contextStyle, setContextStyle] = useState("");
   const openHome = (name: string, anchor?: MenuAnchor) => {
@@ -127,31 +129,10 @@ export function DocxWorkspace() {
   const fonts = useDocumentFonts(document),
     capability = session?.capability(selectedId),
     canFormat = !!capability?.format;
-  const words = useMemo(
-    () =>
-      all.reduce(
-        (sum, p) =>
-          sum +
-          Array.from(
-            new Intl.Segmenter(document?.language, {
-              granularity: "word",
-            }).segment(paragraphText(p)),
-          ).filter((s) => s.isWordLike).length,
-        0,
-      ),
-    [all, document?.language],
-  );
+  const words = session?.statistics.words ?? 0;
   const results = useMemo(() => {
-    if (!query) return [];
-    return all.flatMap((p) => {
-      const content = paragraphText(p);
-      return searchMatches(content, query, searchOptions).map((hit) => ({
-        id: p.id!,
-        content,
-        ...hit,
-      }));
-    });
-  }, [all, query, searchOptions]);
+    return session?.find(query, searchOptions) ?? [];
+  }, [session, document, query, searchOptions]);
   const searchVisible =
     pane === "find" ||
     pane === "replace" ||
@@ -189,7 +170,7 @@ export function DocxWorkspace() {
     return () => {
       current = false;
     };
-  }, [session, document]);
+  }, [session, document, revision]);
   useEffect(() => {
     editor.refresh();
     editor.focus();
@@ -581,12 +562,7 @@ export function DocxWorkspace() {
     setQuery(value);
     setSearchOptions(options);
     const items = paragraphs(activeSession.current?.document ?? document);
-    const matches = items.flatMap((p) =>
-      searchMatches(paragraphText(p), value, options).map((hit) => ({
-        id: p.id!,
-        ...hit,
-      })),
-    );
+    const matches = activeSession.current?.find(value, options) ?? [];
     const index = nextMatchIndex(
       matches,
       items.map((p) => p.id!),

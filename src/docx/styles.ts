@@ -1,5 +1,6 @@
 import type { Element } from "@xmldom/xmldom";
 import type { ParagraphProperties, RunProperties } from "../model/document.js";
+import type { StyleCatalog, StyleDefinition } from "../core/styles.js";
 import {
   childElements,
   childWord,
@@ -139,6 +140,43 @@ export class Styles {
         styleId: direct.styleId ?? this.defaultIds.get("paragraph") ?? "Normal",
       },
       run,
+    };
+  }
+  context(tableLayers: StyleLayer[] = []) {
+    let paragraph = this.defaults.paragraph,
+      run = this.defaults.run;
+    for (const layer of tableLayers) {
+      paragraph = mergeParagraph(paragraph, layer.paragraph);
+      run = mergeRun(run, layer.run, true);
+    }
+    return { paragraph, run };
+  }
+  catalog(): StyleCatalog {
+    const definitions: StyleDefinition[] = [];
+    for (const [id, { element, type }] of this.styles) {
+      if (type !== "paragraph" && type !== "character") continue;
+      definitions.push({
+        id,
+        kind: type,
+        name: wordValue(element, "name") ?? id,
+        basedOn: wordValue(element, "basedOn"),
+        gallery:
+          !childWord(element, "semiHidden") &&
+          (!!childWord(element, "qFormat") ||
+            !!childWord(element, "unhideWhenUsed") ||
+            id === "Normal"),
+        toggleRun: true,
+        paragraph: parseParagraphProperties(
+          childWord(element, "pPr"),
+          this.theme,
+        ),
+        run: parseRunPropertyElement(childWord(element, "rPr"), this.theme),
+      });
+    }
+    return {
+      definitions,
+      defaultParagraphStyleId: this.defaultIds.get("paragraph") ?? "Normal",
+      defaults: { paragraph: this.defaults.paragraph, run: this.defaults.run },
     };
   }
   run(base: RunProperties, direct: RunProperties): RunProperties {

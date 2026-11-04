@@ -29,164 +29,36 @@ import {
   editStyle,
 } from "./session-parts.js";
 import { writeTextEffects, W14 } from "./text-effects.js";
-import { selectionStyleDelta } from "./style-selection.js";
+import { selectionStyleDelta } from "../core/style-selection.js";
+import { DocumentEngine, type EngineSnapshot } from "../core/document.js";
+import type { StyleCatalog } from "../core/styles.js";
+import type { ListDefinition } from "../core/lists.js";
 
-export interface DocxStyle {
-  id: string;
-  name: string;
-  basedOn?: string;
-  gallery: boolean;
-  run: RunProperties;
-  paragraph: ParagraphProperties;
-}
-
-export interface RunFormat {
-  textOutline?: RunProperties["textOutline"];
-  textShadow?: RunProperties["textShadow"];
-  glow?: RunProperties["glow"];
-  reflection?: RunProperties["reflection"];
-  ligatures?: RunProperties["ligatures"];
-  numberForm?: RunProperties["numberForm"];
-  numberSpacing?: RunProperties["numberSpacing"];
-  stylisticSets?: RunProperties["stylisticSets"];
-  clear?: boolean;
-  bold?: boolean;
-  italic?: boolean;
-  underline?:
-    | "single"
-    | "double"
-    | "thick"
-    | "dotted"
-    | "dash"
-    | "dotDash"
-    | "dotDotDash"
-    | "wave"
-    | "none";
-  strike?: boolean;
-  fontFamily?: string;
-  fontSizePt?: number;
-  color?: string;
-  highlight?: string;
-  verticalAlign?: "baseline" | "superscript" | "subscript";
-  caps?: boolean;
-  smallCaps?: boolean;
-  hidden?: boolean;
-  letterSpacingPt?: number;
-  positionPt?: number;
-  complexScriptFont?: string;
-  complexScriptSizePt?: number;
-  complexScriptBold?: boolean;
-  complexScriptItalic?: boolean;
-}
-export interface ParagraphFormat {
-  direction?: "rtl" | "ltr";
-  alignment?: "left" | "center" | "right" | "justify";
-  spaceBeforePt?: number;
-  spaceAfterPt?: number;
-  indentStartPt?: number;
-  indentEndPt?: number;
-  lineSpacing?: number;
-  pageBreakBefore?: boolean;
-  keepNext?: boolean;
-  keepLines?: boolean;
-  styleId?: string;
-  firstLinePt?: number;
-  shading?: string;
-  borders?: "none" | "all" | "outside" | "top" | "bottom" | "left" | "right";
-}
-export type EditCommand =
-  | {
-      type: "text";
-      id: string;
-      start: number;
-      end: number;
-      text: string;
-      format?: RunFormat;
-    }
-  | { type: "run"; id: string; format: RunFormat; start?: number; end?: number }
-  | { type: "clearRun"; id: string; start?: number; end?: number }
-  | { type: "splitParagraph"; id: string; start: number; end: number }
-  | { type: "joinParagraph"; id: string; direction: "backward" | "forward" }
-  | {
-      type: "updateStyleFromSelection";
-      id: string;
-      styleId: string;
-      start: number;
-      end: number;
-    }
-  | {
-      type: "list";
-      id: string;
-      kind:
-        | "bullet"
-        | "decimal"
-        | "decimalZero"
-        | "lowerLetter"
-        | "upperLetter"
-        | "upperRoman"
-        | "lowerRoman"
-        | "none";
-      level?: number;
-      start?: number;
-      bullet?: string;
-      restart?: boolean;
-      continue?: boolean;
-      preserveDefinition?: boolean;
-      pattern?: string;
-      multilevel?: "decimal" | "mixed" | "bullet";
-    }
-  | {
-      type: "style";
-      styleId: string;
-      name?: string;
-      basedOn?: string;
-      gallery?: boolean;
-      run?: RunFormat;
-      paragraph?: ParagraphFormat;
-    }
-  | {
-      type: "sort";
-      ids: string[];
-      descending?: boolean;
-      numeric?: boolean;
-      locale?: string;
-    }
-  | { type: "paragraph"; id: string; format: ParagraphFormat }
-  | {
-      type: "insertParagraph";
-      id?: string;
-      text: string;
-      pageBreakBefore?: boolean;
-    }
-  | { type: "insertTable"; id?: string; rows: number; columns: number }
-  | {
-      type: "page";
-      widthPt: number;
-      heightPt: number;
-      margins?: { top: number; bottom: number; left: number; right: number };
-    };
-export interface ParagraphCapability {
-  text: boolean;
-  format: boolean;
-  reason?: string;
-}
-export interface DocxSession {
-  readonly document: DocumentIR;
-  readonly dirty: boolean;
-  readonly canUndo: boolean;
-  readonly canRedo: boolean;
-  readonly canSetPage: boolean;
-  readonly lockedReason: string | undefined;
-  readonly selection: { id: string; start: number; end: number } | undefined;
-  styles(): Promise<DocxStyle[]>;
-  capability(id: string): ParagraphCapability;
-  execute(command: EditCommand): Promise<DocumentIR>;
-  executeBatch(commands: EditCommand[]): Promise<DocumentIR>;
-  undo(): Promise<DocumentIR>;
-  redo(): Promise<DocumentIR>;
+export type {
+  EditCommand,
+  ParagraphFormat,
+  RunFormat,
+  ParagraphCapability,
+} from "../core/types.js";
+export type { DocumentStyle as DocxStyle } from "../core/types.js";
+import type {
+  DocumentSession,
+  EditCommand,
+  DocumentStyle as DocxStyle,
+  ParagraphFormat,
+  RunFormat,
+  ParagraphCapability,
+} from "../core/types.js";
+export interface DocxSession extends DocumentSession {
+  readonly compatibilityStatistics: {
+    packageParses: number;
+    partWrites: number;
+    queuedCommands: number;
+  };
   exportDocx(): Promise<Uint8Array>;
   original(): Uint8Array;
 }
+
 type Source = {
   part: string;
   path: number[];
@@ -894,13 +766,33 @@ export async function openDocxSession(
       )
         lockedReason = "This document has editing protection.";
     }
-  let states: Map<string, string>[] = [new Map()],
-    cursor = 0;
-  let identityStates: Map<string, string>[] = [new Map()],
-    nextIdentity = 1;
+  let sourceParts = new Map<string, string>();
+  // Supported edits preserve the number of sections; avoid parsing XML from UI capability getters.
+  const canSetPage =
+    !lockedReason &&
+    descendants(parseXml(originalMain).documentElement!, "sectPr").length <= 1;
+  let sourceIdentities = new Map<string, string>();
+  let nextIdentity = 1;
   let selection: { id: string; start: number; end: number } | undefined;
   let sources = new Map<string, Source>(),
     document: DocumentIR;
+  let engine!: DocumentEngine;
+  let packageParses = 0,
+    partWrites = 0;
+  let queued: EditCommand[] = [],
+    baseline: EngineSnapshot;
+  type Revision = {
+    model: EngineSnapshot;
+    parts: Map<string, string>;
+    ids: Map<string, string>;
+    sources: Map<string, Source>;
+    queued: EditCommand[];
+    baseline: EngineSnapshot;
+    selection: typeof selection;
+  };
+  let revisions: Revision[] = [],
+    revisionCursor = 0,
+    revisionNumber = 0;
   function overlay(changes: Map<string, string>): DocxPackage {
     return {
       ...pkg,
@@ -915,7 +807,10 @@ export async function openDocxSession(
     changes: Map<string, string>,
     identities: Map<string, string>,
   ) {
+    packageParses++;
     const next = new Map<string, Source>();
+    let styles: StyleCatalog = { definitions: [] },
+      lists: ListDefinition[] = [];
     const doc = await parseDocxPackage(
       overlay(changes),
       (part, element, paragraph) => {
@@ -926,12 +821,20 @@ export async function openDocxSession(
         paragraph.id = id;
         next.set(id, { part, path, element, paragraph });
       },
+      (catalog, definitions) => {
+        styles = catalog;
+        lists = definitions;
+      },
     );
     sources = next;
-    document = doc;
-    return doc;
+    engine = new DocumentEngine(
+      { document: doc, styles, lists },
+      { capability: (id) => capability(id), lockedReason, historyLimit: 0 },
+    );
+    document = engine.document;
+    return document;
   }
-  await load(states[0], identityStates[0]);
+  await load(sourceParts, sourceIdentities);
   const capability = (id: string): ParagraphCapability => {
     const source = sources.get(id);
     if (lockedReason)
@@ -972,11 +875,12 @@ export async function openDocxSession(
         : "This paragraph contains fields, bookmarks, drawings or other structured content. Its text and run formatting are preserved as read-only.",
     };
   };
-  let pending = false,
-    batching = false;
+  baseline = engine.snapshot();
+  revisions = [capture()];
+  let pending = false;
   async function change(command: EditCommand) {
     if (lockedReason) throw new Error(lockedReason);
-    const current = states[cursor],
+    const current = sourceParts,
       updated = new Map(current);
     const source =
       "id" in command && command.id
@@ -984,6 +888,9 @@ export async function openDocxSession(
         : command.type === "sort"
           ? sources.get(command.ids[0])
           : undefined;
+    if (source)
+      source.paragraph =
+        engine.getParagraph(source.paragraph.id!) ?? source.paragraph;
     if ("id" in command && command.id && !source)
       throw new Error(
         "This selection belongs to an older document revision. Select it again.",
@@ -1333,7 +1240,8 @@ export async function openDocxSession(
     )
       return document!;
     updated.set(part, value);
-    const identities = new Map(identityStates[cursor]);
+    partWrites++;
+    const identities = new Map(sourceIdentities);
     for (const location of identities.keys())
       if (location.startsWith(`${part}#`)) identities.delete(location);
     for (const [element, id] of known) {
@@ -1342,22 +1250,25 @@ export async function openDocxSession(
       if (top === root)
         identities.set(`${part}#${sourcePath(element).join(".")}`, id);
     }
-    const result = await load(updated, identities); // Commit only if the new source imports successfully.
-    states = states.slice(0, cursor + 1);
-    states.push(updated);
-    cursor++;
-    identityStates = identityStates.slice(0, cursor);
-    identityStates.push(identities);
+    const incremental = [
+      "text",
+      "run",
+      "clearRun",
+      "style",
+      "paragraph",
+      "updateStyleFromSelection",
+    ].includes(command.type);
+    // Common edits update the portable state directly; structural OOXML reconciliation stays in this adapter.
+    const result = incremental
+      ? await engine.execute(command)
+      : await load(updated, identities);
+    document = result;
+    sourceParts = updated;
+    sourceIdentities = identities;
     selection = nextSelection;
-    // ponytail: bounded snapshot history; use part deltas if large-document editing requires it.
-    if (!batching && states.length > 101) {
-      states.splice(1, 1);
-      identityStates.splice(1, 1);
-      cursor--;
-    }
     return result;
   }
-  async function exclusive(action: () => Promise<DocumentIR>) {
+  async function exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (pending)
       throw new Error("Wait for the current document change to finish.");
     pending = true;
@@ -1367,27 +1278,145 @@ export async function openDocxSession(
       pending = false;
     }
   }
+  function capture(): Revision {
+    return {
+      model: engine.snapshot(),
+      parts: sourceParts,
+      ids: sourceIdentities,
+      sources,
+      queued,
+      baseline,
+      selection,
+    };
+  }
+  function restore(revision: Revision) {
+    sourceParts = revision.parts;
+    sourceIdentities = revision.ids;
+    sources = revision.sources;
+    queued = revision.queued;
+    baseline = revision.baseline;
+    selection = revision.selection;
+    engine = new DocumentEngine(revision.model, {
+      capability,
+      lockedReason,
+      historyLimit: 0,
+    });
+    document = engine.document;
+  }
+  function common(command: EditCommand) {
+    return [
+      "text",
+      "run",
+      "clearRun",
+      "style",
+      "paragraph",
+      "updateStyleFromSelection",
+    ].includes(command.type);
+  }
+  function validateParagraph(id: string) {
+    const source = sources.get(id);
+    if (!source) throw new Error("Select a paragraph.");
+    for (
+      let e: Element | null = source.element;
+      e;
+      e = e.parentNode?.nodeType === 1 ? (e.parentNode as Element) : null
+    )
+      if (
+        ["sdt", "ins", "del", "moveFrom", "moveTo"].some((name) =>
+          isWord(e!, name),
+        )
+      )
+        throw new Error("Controlled or tracked paragraphs are read-only.");
+  }
+  async function flushCompatibility() {
+    if (!queued.length) return;
+    const before = capture(),
+      authoritative = engine;
+    try {
+      engine = new DocumentEngine(baseline, {
+        capability,
+        lockedReason,
+        historyLimit: 0,
+      });
+      document = engine.document;
+      for (const command of queued) {
+        await change(command);
+      }
+      queued = [];
+      baseline = authoritative.snapshot();
+      engine = authoritative;
+      document = engine.document;
+      selection = before.selection;
+    } catch (error) {
+      restore(before);
+      throw error;
+    }
+  }
+  async function perform(commands: EditCommand[]) {
+    if (commands.length > 500)
+      throw new Error("Apply changes to at most 500 paragraphs at a time.");
+    const before = capture();
+    try {
+      for (const command of structuredClone(commands)) {
+        if (common(command)) {
+          if (command.type === "paragraph") validateParagraph(command.id);
+          const previous = engine.document;
+          const stylesBefore =
+            command.type === "style"
+              ? JSON.stringify(engine.snapshot().styles)
+              : "";
+          await engine.execute(command);
+          document = engine.document;
+          if (
+            document !== previous ||
+            (command.type === "style" &&
+              stylesBefore !== JSON.stringify(engine.snapshot().styles))
+          )
+            queued = [...queued, command];
+          selection = engine.selection ?? selection;
+        } else {
+          await flushCompatibility();
+          await change(command);
+          baseline = engine.snapshot();
+        }
+      }
+      if (document === before.model.document && queued === before.queued)
+        return document;
+      revisions = [...revisions.slice(0, revisionCursor + 1), capture()];
+      revisionCursor++;
+      revisionNumber++;
+      if (revisions.length > 101) {
+        revisions.splice(1, 1);
+        revisionCursor--;
+      }
+      return document;
+    } catch (error) {
+      restore(before);
+      throw error;
+    }
+  }
   return {
+    get statistics() {
+      return { ...engine.statistics, revision: revisionNumber };
+    },
+    get compatibilityStatistics() {
+      return { packageParses, partWrites, queuedCommands: queued.length };
+    },
+    find: (query, options) => engine.find(query, options),
     get document() {
       return document!;
     },
     get dirty() {
-      return cursor > 0;
+      return revisionCursor > 0;
     },
     get canUndo() {
-      return cursor > 0;
+      return revisionCursor > 0;
     },
     get canRedo() {
-      return cursor < states.length - 1;
+      return revisionCursor < revisions.length - 1;
     },
     get canSetPage() {
-      return (
-        !lockedReason &&
-        descendants(
-          parseXml(states[cursor].get(main) ?? originalMain).documentElement!,
-          "sectPr",
-        ).length <= 1
-      );
+      return canSetPage;
     },
     get lockedReason() {
       return lockedReason;
@@ -1396,65 +1425,41 @@ export async function openDocxSession(
     get selection() {
       return selection;
     },
-    styles: () => readStyles(overlay(states[cursor]), main),
-    execute: (command) => exclusive(() => change(command)),
-    executeBatch: (commands) =>
-      exclusive(async () => {
-        if (commands.length > 500)
-          throw new Error("Apply changes to at most 500 paragraphs at a time.");
-        const previousStates = states,
-          previousIds = identityStates,
-          previousCursor = cursor,
-          previousSelection = selection;
-        batching = true;
-        try {
-          for (const command of commands) await change(command);
-          if (cursor !== previousCursor) {
-            const final = states[cursor],
-              ids = identityStates[cursor];
-            states = [...previousStates.slice(0, previousCursor + 1), final];
-            identityStates = [...previousIds.slice(0, previousCursor + 1), ids];
-            cursor = previousCursor + 1;
-          }
-          return document!;
-        } catch (error) {
-          states = previousStates;
-          identityStates = previousIds;
-          cursor = previousCursor;
-          selection = previousSelection;
-          await load(states[cursor], identityStates[cursor]);
-          throw error;
-        } finally {
-          batching = false;
-        }
-      }),
+    styles: () => engine.styles(),
+    execute: (command) => exclusive(() => perform([command])),
+    executeBatch: (commands) => exclusive(() => perform(commands)),
     undo: () =>
       exclusive(async () => {
-        if (cursor === 0) return document!;
-        const doc = await load(states[cursor - 1], identityStates[cursor - 1]);
-        cursor--;
-        selection = undefined;
-        return doc;
+        if (revisionCursor > 0) {
+          restore(revisions[--revisionCursor]);
+          selection = undefined;
+          revisionNumber++;
+        }
+        return document;
       }),
     redo: () =>
       exclusive(async () => {
-        if (cursor === states.length - 1) return document!;
-        const doc = await load(states[cursor + 1], identityStates[cursor + 1]);
-        cursor++;
-        selection = undefined;
-        return doc;
+        if (revisionCursor < revisions.length - 1) {
+          restore(revisions[++revisionCursor]);
+          selection = undefined;
+          revisionNumber++;
+        }
+        return document;
       }),
     original: () => original.slice(),
-    async exportDocx() {
-      const changes = states[cursor];
-      if (!changes.size) return original.slice();
-      const entries: Record<string, Uint8Array> = {};
-      for (const path of new Set([...pkg.listParts(), ...changes.keys()]))
-        entries[path] = changes.has(path)
-          ? strToU8(changes.get(path)!)
-          : await pkg.readBinary(path);
-      return zipSync(entries);
-    },
+    exportDocx: () =>
+      exclusive(async () => {
+        await flushCompatibility();
+        revisions[revisionCursor] = capture();
+        const changes = sourceParts;
+        if (!changes.size) return original.slice();
+        const entries: Record<string, Uint8Array> = {};
+        for (const path of new Set([...pkg.listParts(), ...changes.keys()]))
+          entries[path] = changes.has(path)
+            ? strToU8(changes.get(path)!)
+            : await pkg.readBinary(path);
+        return zipSync(entries);
+      }),
   };
 }
 function ensureDetached(parent: Element, name: string) {

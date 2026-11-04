@@ -1,4 +1,4 @@
-/** Portable preview IR. Measurements are points unless a unit is explicit. */
+/** Portable document model with authored and computed formatting. Measurements are points unless explicit. */
 export interface DocumentIR {
   type: "document";
   schemaVersion: 2;
@@ -82,6 +82,10 @@ export interface Paragraph {
   properties: ParagraphProperties;
   directProperties?: ParagraphProperties;
   markProperties?: RunProperties;
+  /** Style-independent formatting supplied by the containing story/table and document defaults. */
+  formattingContext?: { paragraph: ParagraphProperties; run: RunProperties };
+  directMarkProperties?: RunProperties;
+  listMarkProperties?: RunProperties;
   children: Inline[];
 }
 export interface ComplexScriptProperties {

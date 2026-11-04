@@ -6,11 +6,11 @@ import {
   type RefObject,
 } from "react";
 import type {
-  DocxSession,
+  DocumentSession,
   DocumentIR,
   EditCommand,
   RunFormat,
-} from "@local/docx-ir-engine";
+} from "@local/docx-ir-engine/core";
 import {
   editableText,
   paragraphs,
@@ -27,7 +27,7 @@ export interface PageSelection {
 }
 interface Options {
   container: RefObject<HTMLElement | null>;
-  session: DocxSession | null;
+  session: DocumentSession | null;
   document: DocumentIR | null;
   isBusy: () => boolean;
   onCommit: (document: DocumentIR) => void;

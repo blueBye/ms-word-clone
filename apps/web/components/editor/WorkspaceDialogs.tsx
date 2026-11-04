@@ -1,5 +1,5 @@
 import type { FormEvent } from 'react';
-import type { DocumentIR, Paragraph, EditCommand, ParagraphFormat } from '@local/docx-ir-engine';
+import type { DocumentIR, Paragraph, EditCommand, ParagraphFormat } from '@local/docx-ir-engine/core';
 import { Dialog } from './Controls';
 export type EditorModal='page'|'paragraph'|'table'|'rename'|null;
 interface Props {
