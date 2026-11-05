@@ -19,6 +19,7 @@ export type StoryVariants = Partial<
   Record<"first" | "default" | "even", Block[]>
 >;
 export interface PageLayout {
+  columns?: { count: number; gapPt: number; separator?: boolean };
   widthPt?: number;
   heightPt?: number;
   margins?: Partial<

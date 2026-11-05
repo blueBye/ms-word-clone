@@ -577,14 +577,7 @@ button:hover:not(:disabled) {
 .page-workspace [data-docx-page] [data-paragraph-id] {
   cursor: text;
 }
-.page-workspace [data-docx-page] [data-selected] {
-  outline: 1px solid #3778ca65;
-  outline-offset: 3px;
-  border-radius: 1px;
-}
-.page-workspace [data-docx-page] [data-selected]:hover {
-  outline-color: #3778ca;
-}
+
 .task-pane {
   width: 325px;
   flex-shrink: 0;
@@ -2382,5 +2375,92 @@ button:hover:not(:disabled) {
   }
   .home-dropdown .home-styles-list {
     grid-template-columns: repeat(3, minmax(0, 104px));
+  }
+}
+/* Document selection is text highlighting, never paragraph boxes. */
+::highlight(docx-selection) {
+  background: #b9d7fa;
+  color: inherit;
+}
+.page-workspace[contenteditable] {
+  outline: none;
+  caret-color: #151515;
+}
+.paragraph-ruler {
+  height: 29px;
+  position: relative;
+  margin: 0 auto 14px;
+  background: #fff;
+  border: 1px solid #c7ccd3;
+  user-select: none;
+}
+.ruler-margin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #dce0e5;
+}
+.ruler-margin-right {
+  left: auto;
+  right: 0;
+}
+.ruler-tick {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: #58616b;
+  line-height: 12px;
+}
+.ruler-tick.minor {
+  top: 8px;
+  height: 5px;
+  border-left: 1px solid #82909b;
+}
+.ruler-handle {
+  position: absolute;
+  padding: 0;
+  width: 12px;
+  height: 9px;
+  transform: translateX(-50%);
+  background: #fff;
+  border: 1px solid #667889;
+  border-radius: 0;
+  touch-action: none;
+  z-index: 1;
+}
+.ruler-handle:focus-visible {
+  outline: 2px solid #2873b8;
+}
+.ruler-handle:hover {
+  background: #bdd8f2;
+}
+.ruler-first {
+  top: -1px;
+  clip-path: polygon(0 0, 100% 0, 100% 40%, 50% 100%, 0 40%);
+}
+.ruler-hanging,
+.ruler-end {
+  bottom: 5px;
+  clip-path: polygon(50% 0, 100% 60%, 100% 100%, 0 100%, 0 60%);
+}
+.ruler-start {
+  bottom: -1px;
+  height: 7px;
+}
+.page-workspace[data-editing-story] [data-docx-body] {
+  opacity: 0.5;
+}
+.page-workspace[data-editing-story] [data-docx-story] {
+  outline: 1px dashed #a2b1c1;
+  outline-offset: 4px;
+}
+.clipboard-pane-actions {
+  flex-wrap: wrap;
+}
+@media print {
+  .paragraph-ruler {
+    display: none;
   }
 }

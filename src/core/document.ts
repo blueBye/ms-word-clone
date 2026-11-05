@@ -26,6 +26,7 @@ import { ListStore, type ListDefinition } from "./lists.js";
 import { editStructure } from "./structure.js";
 import { searchMatches, type SearchOptions } from "./search.js";
 import { paragraphLocations, patchParagraphs } from "./tree.js";
+import { hyperlink } from "./assets.js";
 
 export interface EngineSnapshot {
   document: DocumentIR;
@@ -247,7 +248,7 @@ export class DocumentEngine implements DocumentSession {
     if (this.options.capability) return this.options.capability(id);
     const plain = this.authored
       .get(id)!
-      .children.every((c) => c.type === "text" && !c.field && !c.href);
+      .children.every((c) => c.type === "text" && !c.field);
     return {
       text: plain,
       format: plain,
@@ -416,12 +417,97 @@ export class DocumentEngine implements DocumentSession {
   }
   private apply(command: EditCommand) {
     if (this.lockedReason) throw new Error(this.lockedReason);
+    if (command.type === "columns") {
+      const count = finite(command.count, 1, 4);
+      if (!Number.isInteger(count))
+        throw new Error("Use a whole number of columns.");
+      this.value = freeze({
+        ...this.value,
+        page: {
+          ...this.value.page,
+          columns: {
+            count,
+            gapPt: finite(command.gapPt ?? 36, 0, 144),
+            separator: command.separator,
+          },
+        },
+      });
+      return;
+    }
     const id = "id" in command ? command.id : undefined;
     const p = id ? this.resolved.get(id) : undefined;
     if (id && !p)
       throw new Error(
         "This selection belongs to an older document revision. Select it again.",
       );
+    if (command.type === "story") {
+      const kind = command.kind === "header" ? "headers" : "footers",
+        variant = command.variant ?? "default";
+      const stories = { ...this.value[kind] };
+      if (command.remove) delete stories[variant];
+      else if (command.pageNumber || command.appendText || !stories[variant]) {
+        const paragraph: Paragraph = {
+          type: "paragraph",
+          id: `p${this.nextId++}`,
+          properties: {},
+          directProperties: { alignment: command.alignment ?? "left" },
+          children: [
+            {
+              type: "text",
+              text: command.pageNumber ? "1" : "",
+              properties: {},
+              directProperties: {},
+              ...(command.pageNumber ? { field: "page" as const } : {}),
+            },
+          ],
+        };
+        stories[variant] =
+          command.pageNumber || command.appendText
+            ? [...(stories[variant] ?? []), paragraph]
+            : [paragraph];
+        this.currentSelection = { id: paragraph.id!, start: 0, end: 0 };
+      }
+      this.restore({
+        document: { ...this.value, [kind]: stories },
+        styles: this.store.snapshot(),
+        lists: this.lists.snapshot(),
+      });
+      return;
+    }
+    if (command.type === "link") {
+      if (!this.capability(command.id).text)
+        throw new Error("Select editable text to insert a link.");
+      hyperlink(command.href);
+      const content =
+        command.text ?? paragraphText(p!).slice(command.start, command.end);
+      if (!content) throw new Error("Enter text to display for the link.");
+      const next = rewriteParagraph(p!, {
+        type: "text",
+        id: command.id,
+        start: command.start,
+        end: command.end,
+        text: content,
+      });
+      let offset = 0;
+      next.children = next.children.map((r) => {
+        if (r.type !== "text") return r;
+        const start = offset;
+        offset += r.text.length;
+        return start >= command.start &&
+          offset <= command.start + content.length
+          ? {
+              ...r,
+              href: command.href,
+              directProperties: mergeRun(r.directProperties ?? {}, {
+                underline: "single",
+                color: "#0563C1",
+              }),
+            }
+          : r;
+      });
+      this.setParagraph(next);
+      return;
+    }
     if (command.type === "style") {
       this.editStyle(command);
       return;

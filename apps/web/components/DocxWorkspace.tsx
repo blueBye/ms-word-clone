@@ -7,6 +7,7 @@ import {
   type EditCommand,
   type ParagraphFormat,
   type RunFormat,
+  similarFormatting,
 } from "@local/docx-ir-engine/core";
 import {
   openDocxSession,
@@ -41,6 +42,9 @@ import { usePageEditor, type PageSelection } from "./editor/usePageEditor";
 import { HomeRibbon } from "./editor/HomeRibbon";
 import { HomeDialogs } from "./editor/HomeDialogs";
 import { ClipboardPane } from "./editor/ClipboardPane";
+import { useClipboard } from "./editor/useClipboard";
+import { ParagraphRuler } from "./editor/ParagraphRuler";
+import { InsertLinkDialog } from "./editor/InsertLinkDialog";
 import { StylesPane } from "./editor/StylesPane";
 import type { MenuAnchor } from "./editor/HomeMenu";
 
@@ -99,6 +103,9 @@ export function DocxWorkspace() {
     [downloaded, setDownloaded] = useState(-1);
   const [showMarks, setShowMarks] = useState(false),
     [painter, setPainter] = useState<RunFormat | null>(null);
+  const [editingStory, setEditingStory] = useState<"header" | "footer" | null>(
+    null,
+  );
   const [repeatFormat, setRepeatFormat] = useState<RunFormat>({
     underline: "single",
     highlight: "yellow",
@@ -117,11 +124,17 @@ export function DocxWorkspace() {
       Record<"bullet" | "decimal", Extract<EditCommand, { type: "list" }>>
     >
   >({});
-  const [clipboard, setClipboard] = useState<string[]>([]),
-    [scope, setScope] = useState<PageSelection[]>([]);
+  const {
+    items: clipboard,
+    setItems: setClipboard,
+    read: readClipboard,
+    error: clipboardError,
+  } = useClipboard(pane === "clipboard");
+  const [scope, setScope] = useState<PageSelection[]>([]);
   const fileInput = useRef<HTMLInputElement>(null),
     canvas = useRef<HTMLDivElement>(null),
     textInput = useRef<HTMLTextAreaElement>(null);
+  const pictureInput = useRef<HTMLInputElement>(null);
   const request = useRef(0),
     changing = useRef(false),
     activeSession = useRef<DocxSession | null>(null);
@@ -142,7 +155,7 @@ export function DocxWorkspace() {
     pane === "replace" ||
     homeDialog === "findDialog" ||
     homeDialog === "replace";
-  useSearchHighlights(canvas, results, activeHit, searchVisible);
+  useSearchHighlights(canvas, results, activeHit, searchVisible, scope);
   useEffect(() => {
     if (pane === "find") findInput.current?.focus();
   }, [pane]);
@@ -162,6 +175,7 @@ export function DocxWorkspace() {
       setScope([]);
     },
     onCommand: execute,
+    onCommands: executeMany,
     onHistory: (direction) => void history(direction),
     onError: setError,
     onNotice: setNotice,
@@ -264,18 +278,6 @@ export function DocxWorkspace() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [unsaved]);
-  useEffect(() => {
-    canvas.current
-      ?.querySelectorAll<HTMLElement>("[data-docx-page] [data-paragraph-id]")
-      .forEach((node) =>
-        node.toggleAttribute(
-          "data-selected",
-          scope.length
-            ? scope.some((target) => target.id === node.dataset.paragraphId)
-            : node.dataset.paragraphId === selectedId,
-        ),
-      );
-  }, [selectedId, document, pageCount, zoom, scope]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -778,6 +780,28 @@ export function DocxWorkspace() {
       await execute({ type: "style", styleId: id, gallery: false });
   }
   async function action(name: string) {
+    if (name.startsWith("columns:")) {
+      await execute({ type: "columns", count: Number(name.slice(8)) });
+      return;
+    }
+    if (name === "picture") {
+      pictureInput.current?.click();
+      return;
+    }
+    if (name === "link") {
+      setModal("link");
+      return;
+    }
+    if (name === "clipboard") {
+      setPane("clipboard");
+      void readClipboard();
+      return;
+    }
+    if (name.startsWith("story:")) {
+      const [, kind, operation] = name.split(":");
+      await editStory(kind as "header" | "footer", operation);
+      return;
+    }
     if (name === "marks") {
       setShowMarks((value) => !value);
       return;
@@ -850,17 +874,21 @@ export function DocxWorkspace() {
     }
     if (name === "selectAll" || name === "selectSimilar") {
       await editor.flush();
-      const candidates =
+      const ranges = (
         name === "selectAll"
-          ? all
-          : all.filter(
-              (p) => p.properties.styleId === selected?.properties.styleId,
-            );
-      const ranges = candidates
-        .filter((p) => session?.capability(p.id!).format)
-        .map((p) => ({ id: p.id!, start: 0, end: paragraphText(p).length }));
+          ? all.map((p) => ({
+              id: p.id!,
+              start: 0,
+              end: paragraphText(p).length,
+            }))
+          : similarFormatting(
+              all,
+              selectedId,
+              editor.getSelection()?.start ?? 0,
+            )
+      ).filter((r) => session?.capability(r.id).format);
       setScope(ranges);
-      setNotice(`${ranges.length} editable paragraphs selected.`);
+      setNotice(`${ranges.length} text ranges selected.`);
       return;
     }
     if (name.startsWith("goto:")) {
@@ -1113,6 +1141,67 @@ export function DocxWorkspace() {
       setPainter(null);
     }
   }
+  async function editStory(
+    kind: "header" | "footer",
+    operation = "edit",
+    pageNumber = currentPage,
+  ) {
+    const active = activeSession.current;
+    if (!active) return;
+    const variant =
+      active.document.page?.differentFirstPage && pageNumber === 1
+        ? "first"
+        : active.document.page?.evenAndOddHeaders && pageNumber % 2 === 0
+          ? "even"
+          : "default";
+    const stories = kind === "header" ? "headers" : "footers";
+    if (operation === "remove") {
+      await execute({ type: "story", kind, variant, remove: true });
+      setEditingStory(null);
+      return;
+    }
+    if (
+      operation === "number" ||
+      !active.document[stories]?.[variant]?.length
+    ) {
+      if (
+        !(await execute({
+          type: "story",
+          kind,
+          variant,
+          pageNumber: operation === "number",
+          alignment: "center",
+        }))
+      )
+        return;
+    }
+    setEditingStory(kind);
+    const blocks = active.document[stories]?.[variant];
+    let p = blocks
+      ? paragraphs({
+          ...active.document,
+          blocks,
+          headers: undefined,
+          footers: undefined,
+        }).find((p) => active.capability(p.id!).text)
+      : undefined;
+    if (!p && operation === "edit") {
+      if (!(await execute({ type: "story", kind, variant, appendText: true })))
+        return;
+      p = paragraphs({
+        ...active.document,
+        blocks: active.document[stories]?.[variant] ?? [],
+        headers: undefined,
+        footers: undefined,
+      }).find((p) => active.capability(p.id!).text);
+    }
+    if (p) {
+      setSelectedId(p.id!);
+      setDraft(paragraphText(p));
+      setRange({ start: 0, end: 0 });
+      editor.select({ id: p.id!, start: 0, end: 0 }, true);
+    }
+  }
   function fit(mode: "width" | "page") {
     if (!canvas.current) return;
     const w = ((document?.page?.widthPt ?? 595.3) * 4) / 3,
@@ -1277,6 +1366,17 @@ export function DocxWorkspace() {
         />
       )}
       <div className="context-strip">
+        {editingStory && (
+          <button
+            onClick={() => {
+              setEditingStory(null);
+              const p = all.find((p) => document?.blocks.includes(p));
+              if (p) jump(p.id!);
+            }}
+          >
+            Close Header and Footer
+          </button>
+        )}
         <span>
           <span className="mode-dot" />
           Document editing
@@ -1308,15 +1408,47 @@ export function DocxWorkspace() {
         <main
           ref={canvas}
           className={`page-workspace ${painter ? "format-painter-active" : ""}`}
+          data-editing-story={editingStory ?? undefined}
           aria-label="Document pages"
           aria-busy={busy}
           onMouseUp={capturePageSelection}
+          onClick={(event) => {
+            if ((event.target as Element).closest("a")) event.preventDefault();
+          }}
+          onDoubleClick={(event) => {
+            const target = event.target as HTMLElement;
+            const page = target.closest<HTMLElement>("[data-docx-page]");
+            const sheet = target.closest<HTMLElement>("[data-docx-engine]");
+            if (!page || !sheet || !document) return;
+            const bounds = sheet.getBoundingClientRect(),
+              y = event.clientY - bounds.top,
+              scale = bounds.height / (document.page?.heightPt ?? 841.9);
+            const story =
+              target.closest<HTMLElement>("[data-docx-story]")?.dataset
+                .docxStory;
+            if (
+              story === "header" ||
+              y < (document.page?.margins?.top ?? 72) * scale
+            )
+              void editStory("header", "edit", Number(page.dataset.docxPage));
+            else if (
+              story === "footer" ||
+              y > bounds.height - (document.page?.margins?.bottom ?? 72) * scale
+            )
+              void editStory("footer", "edit", Number(page.dataset.docxPage));
+            else setEditingStory(null);
+          }}
         >
-          <div className="page-ruler" aria-hidden="true">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <span key={n}>{n}</span>
-            ))}
-          </div>
+          {document && (
+            <ParagraphRuler
+              container={canvas}
+              document={document}
+              selected={selected}
+              zoom={zoom}
+              disabled={busy}
+              onChange={para}
+            />
+          )}
           {document ? (
             <PaginatedDocument
               document={document}
@@ -1602,6 +1734,8 @@ export function DocxWorkspace() {
                   disabled={busy || !canFormat}
                   onPaste={insertText}
                   onClear={() => setClipboard([])}
+                  onRead={() => void readClipboard()}
+                  error={clipboardError}
                 />
               )}
               {pane === "styles" && (
@@ -1691,6 +1825,72 @@ export function DocxWorkspace() {
           <button onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
         </div>
       </footer>
+      <input
+        ref={pictureInput}
+        type="file"
+        accept="image/png,image/jpeg"
+        aria-label="Insert Picture"
+        hidden
+        onChange={async (event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (!file) return;
+          try {
+            if (file.size > 20_000_000)
+              throw new Error("Choose an image smaller than 20 MB.");
+            const bitmap = await createImageBitmap(file),
+              available =
+                (document?.page?.widthPt ?? 595.3) -
+                (document?.page?.margins?.left ?? 72) -
+                (document?.page?.margins?.right ?? 72);
+            const scale = Math.min(0.75, available / bitmap.width),
+              widthPt = bitmap.width * scale,
+              heightPt = bitmap.height * scale;
+            bitmap.close();
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result));
+              reader.onerror = () =>
+                reject(new Error("Could not read the image."));
+              reader.readAsDataURL(file);
+            });
+            if (
+              await execute({
+                type: "insertImage",
+                id: selectedId || undefined,
+                dataUrl,
+                widthPt,
+                heightPt,
+                alt: file.name,
+              })
+            ) {
+              const target = activeSession.current?.selection;
+              if (target) {
+                setSelectedId(target.id);
+                setDraft("");
+                editor.select(target, true);
+              }
+            }
+          } catch (error) {
+            setError(
+              error instanceof Error
+                ? error.message
+                : "Could not insert the picture.",
+            );
+          }
+        }}
+      />
+      {modal === "link" && selected && (
+        <InsertLinkDialog
+          selected={selected}
+          range={range ?? { start: 0, end: 0 }}
+          execute={execute}
+          onClose={() => {
+            setModal(null);
+            setTimeout(() => editor.focus(), 0);
+          }}
+        />
+      )}
       <input
         ref={fileInput}
         hidden

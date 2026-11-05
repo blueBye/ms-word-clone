@@ -18,6 +18,7 @@ import {
   readSelection,
   restoreSelection,
   textChange,
+  selectionRanges,
 } from "../../lib/editor";
 
 export interface PageSelection {
@@ -33,11 +34,12 @@ interface Options {
   onCommit: (document: DocumentIR) => void;
   onSelect: (selection: PageSelection, text: string) => void;
   onCommand: (command: EditCommand) => Promise<boolean>;
+  onCommands: (commands: EditCommand[]) => Promise<boolean>;
   onHistory: (direction: "undo" | "redo") => void;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
 }
-/** One native editing island. React owns the preview; it never reconciles browser-edited children. */
+/** A single editing host permits native selection across paragraphs; draft clones isolate React from browser edits. */
 export function usePageEditor(options: Options) {
   const latest = useRef(options);
   latest.current = options;
@@ -49,10 +51,17 @@ export function usePageEditor(options: Options) {
     text: string;
     version: number;
     format: RunFormat;
+    startHint: number;
   } | null>(null);
   const typing = useRef<RunFormat>({}),
     composing = useRef(false),
     timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputStart = useRef(0);
+  const structuralBusy = useRef(false),
+    draining = useRef(false);
+  const queued = useRef<
+    { kind: "text" | "enter" | "backward" | "forward"; text?: string }[]
+  >([]);
   const committing = useRef<Promise<void> | null>(null),
     restoring = useRef(false),
     focused = useRef(false),
@@ -125,6 +134,12 @@ export function usePageEditor(options: Options) {
       text: editableText(el),
       version: ++version.current,
       format: { ...typing.current },
+      startHint: Math.min(
+        buffer.current?.id === id
+          ? buffer.current.startHint
+          : inputStart.current,
+        inputStart.current,
+      ),
     };
     setDirty(true);
     if (!composing.current) schedule();
@@ -151,7 +166,11 @@ export function usePageEditor(options: Options) {
           throw new Error(
             "The active paragraph is no longer in this document.",
           );
-        const change = textChange(paragraphText(p), snapshot.text);
+        const change = textChange(
+          paragraphText(p),
+          snapshot.text,
+          snapshot.startHint,
+        );
         if (change.start !== change.end || change.text) {
           await active.execute({
             type: "text",
@@ -195,7 +214,8 @@ export function usePageEditor(options: Options) {
       island.current?.isConnected &&
       island.current.dataset.paragraphId === selected.id
     ) {
-      if (focus) island.current.focus({ preventScroll: true });
+      if (focus)
+        latest.current.container.current?.focus({ preventScroll: true });
       return island.current;
     }
     const original = editableElement(selected.id);
@@ -203,12 +223,8 @@ export function usePageEditor(options: Options) {
     detach();
     const el = original.cloneNode(true) as HTMLElement;
     el.dataset.editorIsland = "";
-    el.setAttribute("contenteditable", "plaintext-only");
-    el.setAttribute("role", "textbox");
-    el.setAttribute("aria-label", "Document paragraph");
-    el.setAttribute("aria-multiline", "true");
+    // Inherit the document's editing host. Nested editing hosts trap mouse selection.
     el.setAttribute("spellcheck", "false");
-    el.tabIndex = 0;
     original.dataset.editorDisplay = original.style.display;
     original.style.display = "none";
     original.before(el);
@@ -219,134 +235,162 @@ export function usePageEditor(options: Options) {
       editableText(el) !== buffer.current.text
     )
       el.textContent = buffer.current.text;
-    el.addEventListener("input", input);
-    el.addEventListener("compositionstart", () => {
-      composing.current = true;
-      clearTimer();
-    });
-    el.addEventListener("compositionend", () => {
-      composing.current = false;
-      input();
-    });
-    el.addEventListener("focus", () => {
-      focused.current = true;
-    });
-    el.addEventListener("blur", () => {
-      if (island.current !== el) return;
-      focused.current = false;
-      capture();
-      void flush().catch(report);
-    });
-    el.addEventListener("keydown", (event) => {
-      if (event.isComposing) return;
-      if (event.key === "Enter" && !event.shiftKey) {
+    if (focus) {
+      latest.current.container.current?.focus({ preventScroll: true });
+      restoreSelection(el, selected.start, selected.end);
+    }
+    return el;
+  }
+  function keyDown(event: KeyboardEvent) {
+    if (waiting() && ["Enter", "Backspace", "Delete"].includes(event.key)) {
+      event.preventDefault();
+      queued.current.push({
+        kind:
+          event.key === "Enter"
+            ? "enter"
+            : event.key === "Backspace"
+              ? "backward"
+              : "forward",
+      });
+      return;
+    }
+    const multi = selectionRanges(
+      latest.current.container.current!,
+      latest.current.document,
+    );
+    if (
+      multi.length > 1 &&
+      ["Enter", "Backspace", "Delete"].includes(event.key)
+    ) {
+      event.preventDefault();
+      void replaceAcross(multi, "")
+        .then(() =>
+          event.key === "Enter" ? structural("splitParagraph") : undefined,
+        )
+        .catch(report);
+      return;
+    }
+    const el = island.current;
+    if (!el) return;
+    if (event.isComposing) return;
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void structural("splitParagraph");
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      const picked = capture(),
+        p = paragraphs(latest.current.document).find(
+          (p) => p.id === picked?.id,
+        );
+      if (p?.properties.list && (picked?.start === 0 || event.shiftKey)) {
+        void flush()
+          .then(() =>
+            latest.current.onCommand({
+              type: "list",
+              id: p.id!,
+              kind: p.properties.list!.format as Extract<
+                EditCommand,
+                { type: "list" }
+              >["kind"],
+              level: Math.max(
+                0,
+                Math.min(
+                  8,
+                  (p.properties.numbering?.level ?? 0) +
+                    (event.shiftKey ? -1 : 1),
+                ),
+              ),
+              preserveDefinition: true,
+            }),
+          )
+          .catch(report);
+      } else insert("\t");
+    } else if (event.key === "Backspace" || event.key === "Delete") {
+      const picked = capture(),
+        value =
+          picked?.id === el.dataset.paragraphId
+            ? editableText(el)
+            : paragraphText(
+                paragraphs(latest.current.document).find(
+                  (p) => p.id === picked?.id,
+                )!,
+              );
+      if (
+        picked &&
+        picked.start === picked.end &&
+        ((event.key === "Backspace" && picked.start === 0) ||
+          (event.key === "Delete" && picked.end === value.length))
+      ) {
         event.preventDefault();
-        void structural("splitParagraph");
-      } else if (event.key === "Tab") {
-        event.preventDefault();
-        const picked = capture(),
-          p = paragraphs(latest.current.document).find(
-            (p) => p.id === picked?.id,
-          );
-        if (p?.properties.list && (picked?.start === 0 || event.shiftKey)) {
+        const p = paragraphs(latest.current.document).find(
+          (p) => p.id === picked.id,
+        );
+        if (event.key === "Backspace" && p?.properties.list) {
           void flush()
             .then(() =>
               latest.current.onCommand({
                 type: "list",
-                id: p.id!,
-                kind: p.properties.list!.format as Extract<
-                  EditCommand,
-                  { type: "list" }
-                >["kind"],
-                level: Math.max(
-                  0,
-                  Math.min(
-                    8,
-                    (p.properties.numbering?.level ?? 0) +
-                      (event.shiftKey ? -1 : 1),
-                  ),
-                ),
-                preserveDefinition: true,
+                id: picked.id,
+                kind: "none",
               }),
             )
             .catch(report);
-        } else insert("\t");
-      } else if (event.key === "Backspace" || event.key === "Delete") {
-        const picked = capture(),
-          value = editableText(el);
-        if (
-          picked &&
-          picked.start === picked.end &&
-          ((event.key === "Backspace" && picked.start === 0) ||
-            (event.key === "Delete" && picked.end === value.length))
-        ) {
-          event.preventDefault();
-          const p = paragraphs(latest.current.document).find(
-            (p) => p.id === picked.id,
-          );
-          if (event.key === "Backspace" && p?.properties.list) {
-            void flush()
-              .then(() =>
-                latest.current.onCommand({
-                  type: "list",
-                  id: picked.id,
-                  kind: "none",
-                }),
-              )
-              .catch(report);
-            return;
-          }
-          void structural(
-            "joinParagraph",
-            event.key === "Backspace" ? "backward" : "forward",
-          );
+          return;
         }
-      } else if (
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "z"
-      ) {
-        event.preventDefault();
-        void flush()
-          .then(() =>
-            latest.current.onHistory(event.shiftKey ? "redo" : "undo"),
-          )
-          .catch(report);
+        void structural(
+          "joinParagraph",
+          event.key === "Backspace" ? "backward" : "forward",
+        );
       }
-      if (
-        [
-          "ArrowLeft",
-          "ArrowRight",
-          "ArrowUp",
-          "ArrowDown",
-          "Home",
-          "End",
-        ].includes(event.key)
-      )
-        queueMicrotask(() => capture(true));
-    });
-    if (focus) {
-      el.focus({ preventScroll: true });
-      restoreSelection(el, selected.start, selected.end);
+    } else if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === "z"
+    ) {
+      event.preventDefault();
+      void flush()
+        .then(() => latest.current.onHistory(event.shiftKey ? "redo" : "undo"))
+        .catch(report);
     }
-    return el;
+    if (
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+      ].includes(event.key)
+    )
+      queueMicrotask(() => capture(true));
   }
   async function structural(
     type: "splitParagraph" | "joinParagraph",
     direction?: "backward" | "forward",
   ) {
+    structuralBusy.current = true;
     const picked = capture();
-    if (!picked) return;
+    if (!picked) {
+      structuralBusy.current = false;
+      return;
+    }
+    const continued = { ...typing.current };
     try {
       await flush();
       const command: EditCommand =
         type === "splitParagraph"
-          ? { type, id: picked.id, start: picked.start, end: picked.end }
+          ? {
+              type,
+              id: picked.id,
+              start: picked.start,
+              end: picked.end,
+              format: continued,
+            }
           : { type, id: picked.id, direction: direction! };
       if (await latest.current.onCommand(command)) {
         const target = latest.current.session?.selection;
         if (target) {
           selection.current = { ...target };
-          setTyping({});
+          setTyping(continued);
           focused.current = true;
           detach();
           restoring.current = true;
@@ -354,6 +398,70 @@ export function usePageEditor(options: Options) {
       }
     } catch (error) {
       report(error);
+    } finally {
+      structuralBusy.current = false;
+      requestAnimationFrame(() => void drain());
+    }
+  }
+  function waiting() {
+    return (
+      structuralBusy.current ||
+      latest.current.isBusy() ||
+      !!latest.current.container.current?.querySelector(
+        '[data-layout-pending="true"]',
+      )
+    );
+  }
+  async function drain() {
+    if (draining.current || waiting()) return;
+    draining.current = true;
+    try {
+      while (queued.current.length && !waiting()) {
+        const next = queued.current.shift()!;
+        if (next.kind === "enter") {
+          await structural("splitParagraph");
+          continue;
+        }
+        if (next.kind === "text") {
+          insert(next.text ?? "");
+          continue;
+        }
+        const picked = selection.current;
+        if (!picked) continue;
+        const p = paragraphs(latest.current.document).find(
+          (p) => p.id === picked.id,
+        );
+        if (!p) continue;
+        const value =
+          island.current?.dataset.paragraphId === picked.id
+            ? editableText(island.current)
+            : paragraphText(p);
+        let { start, end } = picked;
+        if (start === end) {
+          const edges = [
+            ...Array.from(
+              new Intl.Segmenter(undefined, {
+                granularity: "grapheme",
+              }).segment(value),
+              (s) => s.index,
+            ),
+            value.length,
+          ];
+          if (next.kind === "backward")
+            start = edges.filter((edge) => edge < start).at(-1) ?? start;
+          else end = edges.find((edge) => edge > end) ?? end;
+        }
+        if (start === end) await structural("joinParagraph", next.kind);
+        else {
+          selection.current = { id: picked.id, start, end };
+          focus();
+          insert("");
+        }
+      }
+    } catch (error) {
+      report(error);
+    } finally {
+      draining.current = false;
     }
   }
   function select(value: PageSelection, focus = false) {
@@ -370,10 +478,23 @@ export function usePageEditor(options: Options) {
     }
   }
   function insert(text: string) {
+    if (waiting()) {
+      queued.current.push({ kind: "text", text });
+      return;
+    }
+    const ranges = selectionRanges(
+      latest.current.container.current!,
+      latest.current.document,
+    );
+    if (ranges.length > 1) {
+      void replaceAcross(ranges, text).catch(report);
+      return;
+    }
     const picked = capture() ?? selection.current;
     if (!picked) return;
     const el = ensureIsland(true);
     if (!el) return;
+    inputStart.current = picked.start;
     restoreSelection(el, picked.start, picked.end);
     const range = window.getSelection()?.getRangeAt(0);
     if (!range) return;
@@ -386,6 +507,56 @@ export function usePageEditor(options: Options) {
     native?.removeAllRanges();
     native?.addRange(range);
     input();
+  }
+  async function replaceAcross(ranges: PageSelection[], text: string) {
+    structuralBusy.current = true;
+    try {
+      await flush();
+      const host = latest.current.container.current!;
+      const elements = ranges.map((r) => editableElement(r.id));
+      const commands: EditCommand[] = ranges.map((r, i) => ({
+        type: "text",
+        ...r,
+        text: i === 0 ? text : "",
+        format: i === 0 ? typing.current : undefined,
+      }));
+      // Merge only neighbours in the same body/cell/story; keep table boundaries intact.
+      for (let i = 1; i < ranges.length; i++)
+        if (
+          elements[0] &&
+          elements[i] &&
+          elements[i]!.parentElement === elements[0]!.parentElement
+        )
+          commands.push({
+            type: "joinParagraph",
+            id: ranges[0].id,
+            direction: "forward",
+          });
+      if (await latest.current.onCommands(commands)) {
+        detach();
+        select(
+          {
+            id: ranges[0].id,
+            start: ranges[0].start + text.length,
+            end: ranges[0].start + text.length,
+          },
+          true,
+        );
+        latest.current.onSelect(
+          selection.current!,
+          paragraphText(
+            paragraphs(latest.current.session!.document).find(
+              (p) => p.id === ranges[0].id,
+            )!,
+          ),
+        );
+        restoring.current = true;
+        host.focus({ preventScroll: true });
+      }
+    } finally {
+      structuralBusy.current = false;
+      requestAnimationFrame(() => void drain());
+    }
   }
   function focus() {
     if (window.document.querySelector("dialog[open], [data-home-menu-root]"))
@@ -421,7 +592,10 @@ export function usePageEditor(options: Options) {
       )
         return;
       const el = ensureIsland(true);
-      if (el) restoring.current = false;
+      if (el) {
+        restoring.current = false;
+        void drain();
+      }
     });
     observer.observe(container, {
       childList: true,
@@ -429,6 +603,25 @@ export function usePageEditor(options: Options) {
       attributes: true,
       attributeFilter: ["data-layout-pending"],
     });
+    container.setAttribute("contenteditable", "plaintext-only");
+    container.setAttribute("role", "textbox");
+    container.setAttribute("aria-multiline", "true");
+    container.tabIndex = 0;
+    const activate = () => {
+      const picked = readSelection(container);
+      if (!picked) return; // Leave a multi-paragraph native selection intact.
+      if (!latest.current.session?.capability(picked.id).text) return;
+      const apply = () => {
+        select(picked);
+        const el = ensureIsland();
+        if (el) restoreSelection(el, picked.start, picked.end);
+        focused.current = true;
+        capture(true);
+      };
+      if (buffer.current && buffer.current.id !== picked.id)
+        void flush().then(apply).catch(report);
+      else apply();
+    };
     const down = (event: MouseEvent) => {
       const target = (event.target as Element).closest<HTMLElement>(
         "[data-paragraph-id]",
@@ -446,52 +639,132 @@ export function usePageEditor(options: Options) {
         );
         return;
       }
-      if (buffer.current && buffer.current.id !== id) {
+      // Let the browser place and extend the range. Activate the draft after mouseup.
+    };
+    const before = (event: InputEvent) => {
+      if (waiting()) {
         event.preventDefault();
+        if (event.inputType === "insertText" && event.data)
+          queued.current.push({ kind: "text", text: event.data });
+        else if (
+          event.inputType === "deleteContentBackward" ||
+          event.inputType === "deleteContentForward"
+        )
+          queued.current.push({
+            kind: event.inputType.endsWith("Backward") ? "backward" : "forward",
+          });
+        return;
+      }
+      const ranges = selectionRanges(container, latest.current.document);
+      if (ranges.length > 1 && !event.isComposing) {
+        event.preventDefault();
+        if (
+          event.inputType.startsWith("delete") ||
+          event.inputType === "insertText"
+        )
+          void replaceAcross(ranges, event.data ?? "").catch(report);
+        return;
+      }
+      const picked = readSelection(container);
+      if (!picked || !latest.current.session?.capability(picked.id).text) {
+        event.preventDefault();
+        return;
+      }
+      inputStart.current = picked.start;
+      if (
+        event.inputType === "deleteContentBackward" &&
+        picked.start === picked.end
+      ) {
+        const p = paragraphs(latest.current.document).find(
+          (p) => p.id === picked.id,
+        );
+        const value =
+          island.current?.dataset.paragraphId === picked.id
+            ? editableText(island.current)
+            : p
+              ? paragraphText(p)
+              : "";
+        inputStart.current =
+          Array.from(
+            new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+              value.slice(0, picked.start),
+            ),
+          ).at(-1)?.index ?? 0;
+      }
+      if (buffer.current && buffer.current.id !== picked.id) {
+        event.preventDefault();
+        const text = event.data;
         void flush()
           .then(() => {
-            select({ id, start: 0, end: 0 }, true);
-            capture();
+            select(picked, true);
+            if (text) insert(text);
           })
           .catch(report);
         return;
       }
-      event.preventDefault();
-      select({ id, start: 0, end: 0 });
-      const el = ensureIsland(true);
-      if (!el) return;
-      const doc = window.document as Document & {
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-        caretPositionFromPoint?: (
-          x: number,
-          y: number,
-        ) => { offsetNode: Node; offset: number } | null;
-      };
-      const hit = doc.caretRangeFromPoint?.(event.clientX, event.clientY),
-        position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
-      if (hit && el.contains(hit.startContainer)) {
-        const s = window.getSelection();
-        s?.removeAllRanges();
-        s?.addRange(hit);
-      } else if (position && el.contains(position.offsetNode)) {
-        const r = window.document.createRange();
-        r.setStart(position.offsetNode, position.offset);
-        r.collapse(true);
-        const s = window.getSelection();
-        s?.removeAllRanges();
-        s?.addRange(r);
+      if (island.current?.dataset.paragraphId !== picked.id) {
+        select(picked);
+        const el = ensureIsland();
+        if (el) restoreSelection(el, picked.start, picked.end);
       }
-      capture(true);
+      if (event.inputType === "insertParagraph") {
+        event.preventDefault();
+        void structural("splitParagraph");
+      }
     };
+    const pasted = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain");
+      if (text === undefined) return;
+      event.preventDefault();
+      const ranges = selectionRanges(container, latest.current.document);
+      if (ranges.length > 1) void replaceAcross(ranges, text).catch(report);
+      else insert(text);
+    };
+    const focusIn = () => {
+      focused.current = true;
+    };
+    const focusOut = () => {
+      focused.current = false;
+      capture();
+      void flush().catch(report);
+    };
+    const composeStart = () => {
+      composing.current = true;
+      clearTimer();
+    };
+    const composeEnd = () => {
+      composing.current = false;
+      input();
+    };
+    container.addEventListener("compositionstart", composeStart);
+    container.addEventListener("compositionend", composeEnd);
+    container.addEventListener("keydown", keyDown);
     container.addEventListener("mousedown", down);
+    container.addEventListener("mouseup", activate);
+    container.addEventListener("beforeinput", before);
+    container.addEventListener("input", input);
+    container.addEventListener("paste", pasted);
+    container.addEventListener("focus", focusIn);
+    container.addEventListener("blur", focusOut);
     return () => {
       observer.disconnect();
+      container.removeEventListener("compositionstart", composeStart);
+      container.removeEventListener("compositionend", composeEnd);
+      container.removeEventListener("keydown", keyDown);
       container.removeEventListener("mousedown", down);
+      container.removeEventListener("mouseup", activate);
+      container.removeEventListener("beforeinput", before);
+      container.removeEventListener("input", input);
+      container.removeEventListener("paste", pasted);
+      container.removeEventListener("focus", focusIn);
+      container.removeEventListener("blur", focusOut);
+      container.removeAttribute("contenteditable");
       clearTimer();
       detach();
     };
   }, []);
   useEffect(() => {
+    queued.current = [];
     buffer.current = null;
     selection.current = null;
     setDirty(false);

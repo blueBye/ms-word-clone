@@ -160,7 +160,7 @@ export function Ribbon({
             </Dropdown>
           </Group>
           <Group label="Illustrations">
-            {command("Pictures", "picture")}
+            {command("Pictures", "picture", true, "picture")}
             {command("Shapes", "shapes")}
             {command("Icons", "icons")}
             {command("3D Models", "model")}
@@ -171,7 +171,12 @@ export function Ribbon({
           <Group label="Media">{command("Online Videos", "video")}</Group>
           <Group label="Links">
             <div className="office-stack">
-              {command("Link", "link", false)}
+              <Command
+                label="Link"
+                icon="link"
+                disabled={disabled || !canFormat}
+                onClick={() => onAction("link")}
+              />
               {command("Bookmark", "bookmark", false)}
               {command("Cross-reference", "reference", false)}
             </div>
@@ -187,15 +192,35 @@ export function Ribbon({
                 disabled={!document}
               >
                 <Choice
-                  label={`View ${label}`}
+                  label={`Edit ${label}`}
                   icon={label.toLowerCase()}
-                  onClick={() => onAction("stories")}
+                  onClick={() => onAction(`story:${label.toLowerCase()}:edit`)}
                 />
-                <Choice label={`Edit ${label}`} disabled />
-                <Choice label={`Remove ${label}`} disabled />
+                <Choice
+                  label={`Remove ${label}`}
+                  onClick={() =>
+                    onAction(`story:${label.toLowerCase()}:remove`)
+                  }
+                />
               </Dropdown>
             ))}
-            {command("Page Number", "pageNumber")}
+            <Dropdown
+              label="Page Number"
+              icon="pageNumber"
+              large
+              disabled={disabled || !document}
+            >
+              <Choice
+                label="Top of Page"
+                icon="header"
+                onClick={() => onAction("story:header:number")}
+              />
+              <Choice
+                label="Bottom of Page"
+                icon="footer"
+                onClick={() => onAction("story:footer:number")}
+              />
+            </Dropdown>
           </Group>
           <Group label="Text">
             {command("Text Box", "textBox")}
@@ -352,7 +377,26 @@ export function Ribbon({
                 onClick={() => onAction("page")}
               />
             </Dropdown>
-            {command("Columns", "columns")}
+            <Dropdown
+              label="Columns"
+              icon="columns"
+              large
+              disabled={pageDisabled}
+            >
+              {[
+                ["One", 1],
+                ["Two", 2],
+                ["Three", 3],
+              ].map(([label, count]) => (
+                <Choice
+                  key={label}
+                  label={String(label)}
+                  icon="columns"
+                  checked={(document?.page?.columns?.count ?? 1) === count}
+                  onClick={() => onAction(`columns:${count}`)}
+                />
+              ))}
+            </Dropdown>
             <div className="office-stack">
               <Dropdown
                 label="Breaks"

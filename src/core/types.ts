@@ -69,6 +69,32 @@ export interface ParagraphFormat {
   borders?: "none" | "all" | "outside" | "top" | "bottom" | "left" | "right";
 }
 export type EditCommand =
+  | { type: "columns"; count: number; gapPt?: number; separator?: boolean }
+  | {
+      type: "insertImage";
+      id?: string;
+      dataUrl: string;
+      widthPt: number;
+      heightPt: number;
+      alt: string;
+    }
+  | {
+      type: "link";
+      id: string;
+      start: number;
+      end: number;
+      href: string;
+      text?: string;
+    }
+  | {
+      type: "story";
+      kind: "header" | "footer";
+      variant?: "default" | "first" | "even";
+      remove?: boolean;
+      appendText?: boolean;
+      pageNumber?: boolean;
+      alignment?: "left" | "center" | "right";
+    }
   | {
       type: "text";
       id: string;
@@ -79,7 +105,13 @@ export type EditCommand =
     }
   | { type: "run"; id: string; format: RunFormat; start?: number; end?: number }
   | { type: "clearRun"; id: string; start?: number; end?: number }
-  | { type: "splitParagraph"; id: string; start: number; end: number }
+  | {
+      type: "splitParagraph";
+      id: string;
+      start: number;
+      end: number;
+      format?: RunFormat;
+    }
   | { type: "joinParagraph"; id: string; direction: "backward" | "forward" }
   | {
       type: "updateStyleFromSelection";

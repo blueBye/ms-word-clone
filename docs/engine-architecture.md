@@ -115,3 +115,11 @@ These are one-run observations, not a latency guarantee or a before/after benchm
 5. Add a native-snapshot-to-DOCX authoring exporter when the product needs to save documents created outside the Word-backed session. The current Word save path retains its source envelope; serializing a core snapshot alone intentionally cannot preserve unknown Word parts.
 
 The package entry points provide extraction boundaries now. A later publishing change can split packages without changing the UI command contract. This refactor establishes the engine boundary; it does not certify full Microsoft Word compatibility.
+
+## Editing and authoring follow-up
+
+The browser editor uses one native editing host across the visible pages. Draft paragraph clones inherit that host, which lets mouse selection cross paragraph and style boundaries while keeping browser mutations away from React-owned source nodes. Text selection uses range highlights instead of paragraph outlines. Enter preserves caret formatting; similar-format selection compares computed character formatting, including direct overrides.
+
+Portable commands now cover header/footer stories, PAGE fields, hyperlinks, PNG/JPEG insertion, and equal-width document columns. The DOCX adapter writes their relationships, content types, image parts and section properties, with synchronized undo/redo. Paragraphs containing ordinary hyperlinks remain editable. Tracked/controlled content, fields and drawings retain their existing preservation restrictions. Column rendering flows measured slices into equal-width columns; unequal widths, final-column balancing and mixed-section column layouts still need work.
+
+The UI also supplies drag/keyboard ruler controls and a system clipboard reader. Clipboard history stays in browser memory and follows browser permission/focus rules. Page measurement is clipped out of the scrollable canvas, so hidden measurement sheets do not add empty scroll space.

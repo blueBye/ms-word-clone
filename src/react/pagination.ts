@@ -5,7 +5,7 @@ import type {
   Paragraph,
   Table,
   TableRow,
-} from '../model/document.js';
+} from "../model/document.js";
 
 export interface BlockMeasurement {
   heightPt: number;
@@ -36,7 +36,7 @@ function splitRow(
 ) {
   if (
     row.cantSplit ||
-    row.heightRule === 'exact' ||
+    row.heightRule === "exact" ||
     !measurements ||
     measurements.length !== row.cells.length ||
     row.cells.some(
@@ -62,7 +62,7 @@ function splitRow(
       const block = cell.blocks[end - 1];
       if (
         end === cell.blocks.length ||
-        block.type !== 'paragraph' ||
+        block.type !== "paragraph" ||
         !block.properties.keepNext
       )
         count = end;
@@ -81,7 +81,7 @@ function splitRow(
       blocks: remaining
         ? cell.blocks.slice(counts[index])
         : cell.blocks.slice(0, counts[index]),
-      verticalAlign: 'top' as const,
+      verticalAlign: "top" as const,
     }));
     const measured = measurements.map((cell, index) => ({
       ...cell,
@@ -101,28 +101,55 @@ export interface PageSlice {
   blocks: Block[];
   overflow: boolean;
 }
+export function groupColumns(
+  slices: PageSlice[],
+  count: number,
+): (PageSlice & { columns?: Block[][] })[] {
+  const pages: (PageSlice & { columns?: Block[][] })[] = [];
+  for (const slice of slices) {
+    const previous = pages.at(-1),
+      first = slice.blocks[0];
+    if (
+      count === 1 ||
+      !previous ||
+      previous.columns!.length === count ||
+      (first?.type === "paragraph" && first.properties.pageBreakBefore)
+    )
+      pages.push({
+        ...slice,
+        blocks: [...slice.blocks],
+        ...(count > 1 ? { columns: [slice.blocks] } : {}),
+      });
+    else {
+      previous.columns!.push(slice.blocks);
+      previous.blocks.push(...slice.blocks);
+      previous.overflow ||= slice.overflow;
+    }
+  }
+  return pages;
+}
 
 function isEmptyTableEndParagraph(
   block: Block,
   previous: Block | undefined,
 ): boolean {
-  if (block.type !== 'paragraph' || previous?.type !== 'table') return false;
+  if (block.type !== "paragraph" || previous?.type !== "table") return false;
   const p = block.properties;
   return (
     !p.pageBreakBefore &&
     !p.list &&
     !p.backgroundColor &&
     !Object.values(p.borders ?? {}).some(
-      (border) => !['nil', 'none'].includes(border.style),
+      (border) => !["nil", "none"].includes(border.style),
     ) &&
     block.children.every(
       (child) =>
-        child.type === 'text' &&
+        child.type === "text" &&
         !child.field &&
         !child.text.trim() &&
         !child.properties.backgroundColor &&
         !child.properties.strike &&
-        (!child.properties.underline || child.properties.underline === 'none'),
+        (!child.properties.underline || child.properties.underline === "none"),
     )
   );
 }
@@ -130,20 +157,20 @@ function isEmptyTableEndParagraph(
 export function pageVariant(
   document: DocumentIR,
   number: number,
-): 'first' | 'default' | 'even' {
-  if (number === 1 && document.page?.differentFirstPage) return 'first';
+): "first" | "default" | "even" {
+  if (number === 1 && document.page?.differentFirstPage) return "first";
   return document.page?.evenAndOddHeaders && number % 2 === 0
-    ? 'even'
-    : 'default';
+    ? "even"
+    : "default";
 }
 
 /** Preserve hard breaks without inserting text or mutating the imported model. */
 export function splitPageBreaks(blocks: readonly Block[]): Block[] {
   return blocks.flatMap((block): Block[] => {
     if (
-      block.type !== 'paragraph' ||
+      block.type !== "paragraph" ||
       !block.children.some(
-        (child) => child.type === 'break' && child.kind === 'page',
+        (child) => child.type === "break" && child.kind === "page",
       )
     )
       return [block];
@@ -164,7 +191,7 @@ export function splitPageBreaks(blocks: readonly Block[]): Block[] {
       children = [];
     };
     for (const inline of block.children) {
-      if (inline.type === 'break' && inline.kind === 'page') {
+      if (inline.type === "break" && inline.kind === "page") {
         if (children.length) flush();
         else if (pageBreakBefore) flush();
         pageBreakBefore = true;
@@ -208,14 +235,14 @@ export function paginateBlocks(
       isEmptyTableEndParagraph(block, blocks[index - 1])
     )
       continue;
-    if (block.type === 'paragraph' && block.properties.pageBreakBefore)
+    if (block.type === "paragraph" && block.properties.pageBreakBefore)
       finish();
-    if (block.type === 'paragraph' && block.properties.keepNext) {
+    if (block.type === "paragraph" && block.properties.keepNext) {
       let chain = height;
       for (let next = index + 1; next < blocks.length; next++) {
         chain += measurements[next]?.heightPt ?? 0;
         const following = blocks[next];
-        if (following.type !== 'paragraph' || !following.properties.keepNext)
+        if (following.type !== "paragraph" || !following.properties.keepNext)
           break;
       }
       if (
@@ -226,7 +253,7 @@ export function paginateBlocks(
         finish();
     }
     if (
-      block.type !== 'table' ||
+      block.type !== "table" ||
       !block.rows.length ||
       height <= capacity() - used
     ) {
@@ -272,9 +299,9 @@ export function paginateBlocks(
                   columnsPt: measurement.columnWidthsPt,
                   properties: {
                     ...block.properties,
-                    layout: 'fixed',
+                    layout: "fixed",
                     width: measurement.tableWidthPt
-                      ? { value: measurement.tableWidthPt, unit: 'pt' }
+                      ? { value: measurement.tableWidthPt, unit: "pt" }
                       : block.properties.width,
                   },
                 }
@@ -286,7 +313,7 @@ export function paginateBlocks(
       rows = [];
       fragmentHeight = overhead;
     };
-    for (let row = 0; row < block.rows.length;) {
+    for (let row = 0; row < block.rows.length; ) {
       let end = Math.min(
         block.rows.length,
         row === 0 ? Math.max(1, headerCount + 1) : row + 1,
@@ -329,7 +356,7 @@ export function paginateBlocks(
                 {
                   ...split.first.row,
                   heightPt: available,
-                  heightRule: 'atLeast' as const,
+                  heightRule: "atLeast" as const,
                 },
               ]
             : group),

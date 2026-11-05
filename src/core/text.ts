@@ -6,6 +6,7 @@ import type {
 } from "../model/document.js";
 import type { EditCommand, RunFormat, ParagraphFormat } from "./types.js";
 import { defined, mergeRun } from "./format.js";
+import { runAtPosition } from "./selection.js";
 
 export function paragraphText(p: Paragraph) {
   return p.children
@@ -315,6 +316,7 @@ export function rewriteParagraph(
   if (command.type === "text") validateText(command.text);
   const output: TextRun[] = [],
     runs = p.children as TextRun[];
+  const insertionBase = runAtPosition(p, start, start === end);
   const copy = (base: TextRun, value: string) => ({
     ...base,
     text: value,
@@ -356,7 +358,7 @@ export function rewriteParagraph(
       if (next <= start) output.push(copy(base, base.text));
       else if (offset >= end) {
         if (!inserted) {
-          const item = copy(base, command.text);
+          const item = copy(insertionBase ?? base, command.text);
           if (command.format)
             item.directProperties = mergeRun(
               command.format.clear ? {} : item.directProperties,
@@ -370,7 +372,7 @@ export function rewriteParagraph(
         if (start > offset)
           output.push(copy(base, base.text.slice(0, start - offset)));
         if (!inserted) {
-          const item = copy(base, command.text);
+          const item = copy(insertionBase ?? base, command.text);
           if (command.format)
             item.directProperties = mergeRun(
               command.format.clear ? {} : item.directProperties,

@@ -84,7 +84,11 @@ export function styleFormCommand(
   };
 }
 /** Expand text changes to grapheme boundaries and leave unaffected runs intact. */
-export function textChange(before: string, after: string) {
+export function textChange(
+  before: string,
+  after: string,
+  startHint = before.length,
+) {
   const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   const a = Array.from(segmenter.segment(before), (s) => s.segment),
     b = Array.from(segmenter.segment(after), (s) => s.segment);
@@ -92,6 +96,12 @@ export function textChange(before: string, after: string) {
     suffix = 0;
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix])
     prefix++;
+  // Equal neighbouring characters must not move an edit across a formatting boundary.
+  let limit = 0,
+    units = 0;
+  while (limit < prefix && units + a[limit].length <= startHint)
+    units += a[limit++].length;
+  prefix = limit;
   while (
     suffix < a.length - prefix &&
     suffix < b.length - prefix &&

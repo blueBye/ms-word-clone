@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import type { DocumentIR } from "../model/document.js";
+import type { DocumentIR, Block } from "../model/document.js";
 import { DocumentRenderer } from "./DocumentRenderer.js";
 import { measureBlocks, measureStoryInset } from "./measurement.js";
 import {
   paginateBlocks,
+  groupColumns,
   pageVariant,
   splitPageBreaks,
   type PageSlice,
@@ -28,7 +29,7 @@ type Insets = Record<
 >;
 interface Layout {
   source: DocumentIR;
-  pages: PageSlice[];
+  pages: (PageSlice & { columns?: Block[][] })[];
   insets: Insets;
 }
 
@@ -46,6 +47,17 @@ export function PaginatedDocument({
   const margins = doc.page?.margins;
   const width = doc.page?.widthPt ?? 595.3;
   const height = doc.page?.heightPt ?? 841.9;
+  const columnCount = Math.max(1, Math.min(4, doc.page?.columns?.count ?? 1));
+  const measurementWidth =
+    columnCount === 1
+      ? width
+      : (width -
+          (margins?.left ?? 72) -
+          (margins?.right ?? 72) -
+          (columnCount - 1) * (doc.page?.columns?.gapPt ?? 36)) /
+          columnCount +
+        (margins?.left ?? 72) +
+        (margins?.right ?? 72);
 
   useEffect(() => {
     const container = measureRef.current;
@@ -77,10 +89,11 @@ export function PaginatedDocument({
           ),
         };
       }
-      const pages = paginateBlocks(blocks, measurements, (number) => {
-        const inset = insets[pageVariant(doc, number)];
+      const slices = paginateBlocks(blocks, measurements, (number) => {
+        const inset = insets[pageVariant(doc, Math.ceil(number / columnCount))];
         return height - inset.top - inset.bottom - 1;
       });
+      const pages = groupColumns(slices, columnCount);
       setLayout({ source: doc, pages, insets });
     }
     const schedule = () => {
@@ -142,6 +155,7 @@ export function PaginatedDocument({
       <div
         ref={measureRef}
         aria-hidden="true"
+        contentEditable={false}
         style={{
           position: "absolute",
           left: "-100000px",
@@ -149,10 +163,19 @@ export function PaginatedDocument({
           width: `${width}pt`,
           visibility: "hidden",
           pointerEvents: "none",
+          height: 0,
+          overflow: "hidden",
         }}
       >
         <div data-measure-body="">
-          <DocumentRenderer document={{ ...doc, blocks }} pageLayout />
+          <DocumentRenderer
+            document={{
+              ...doc,
+              page: { ...doc.page, widthPt: measurementWidth },
+              blocks,
+            }}
+            pageLayout
+          />
         </div>
         {(["first", "default", "even"] as const).map((variant) => (
           <div key={variant} data-measure-story={variant}>
@@ -190,10 +213,12 @@ export function PaginatedDocument({
                 pageCount={current.pages.length}
                 contentTopPt={inset.top}
                 contentBottomPt={inset.bottom}
+                columnBlocks={page.columns}
                 showFormattingMarks={showFormattingMarks}
               />
             </div>
             <div
+              contentEditable={false}
               style={{
                 fontFamily: "Segoe UI, Arial, sans-serif",
                 fontSize: "11px",

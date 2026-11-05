@@ -3,15 +3,20 @@ export function ClipboardPane({
   disabled,
   onPaste,
   onClear,
+  onRead,
+  error,
 }: {
   items: string[];
   disabled: boolean;
   onPaste: (text: string) => void;
   onClear: () => void;
+  onRead: () => void;
+  error: string;
 }) {
   return (
     <>
       <div className="clipboard-pane-actions">
+        <button onClick={onRead}>Read Clipboard</button>
         <button
           disabled={disabled || !items.length}
           onClick={() => onPaste([...items].reverse().join("\n"))}
@@ -23,8 +28,14 @@ export function ClipboardPane({
         </button>
       </div>
       <p className="pane-description">
-        Click an item to paste it. Items copied in this editor appear here.
+        Click an item to paste it. Clipboard text is collected while this pane
+        is open.
       </p>
+      {error && (
+        <p className="pane-description" role="status">
+          {error}
+        </p>
+      )}
       <div className="clipboard-pane-items">
         {items.map((item, index) => (
           <button

@@ -682,6 +682,7 @@ export interface DocumentRendererProps {
   pageCount?: number;
   contentTopPt?: number;
   contentBottomPt?: number;
+  columnBlocks?: Block[][];
   showFormattingMarks?: boolean;
 }
 /** Flow preview with document page settings; not a Word pagination engine. */
@@ -694,6 +695,7 @@ export function DocumentRenderer({
   pageCount = 1,
   contentTopPt,
   contentBottomPt,
+  columnBlocks,
   showFormattingMarks = false,
 }: DocumentRendererProps) {
   const page = document.page,
@@ -752,8 +754,43 @@ export function DocumentRenderer({
         </div>
       )}
       {pageLayout ? (
-        <div data-docx-body="" style={{ display: "flow-root" }}>
-          {renderBlocks(document.blocks, context)}
+        <div
+          data-docx-body=""
+          style={
+            columnBlocks
+              ? {
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${page?.columns?.count ?? columnBlocks.length},minmax(0,1fr))`,
+                  columnGap: `${page?.columns?.gapPt ?? 36}pt`,
+                  direction:
+                    document.language?.startsWith("fa") ||
+                    document.language?.startsWith("ar")
+                      ? "rtl"
+                      : "ltr",
+                }
+              : { display: "flow-root" }
+          }
+        >
+          {columnBlocks
+            ? columnBlocks.map((blocks, index) => (
+                <div
+                  key={index}
+                  data-docx-column={index + 1}
+                  style={{
+                    minWidth: 0,
+                    display: "flow-root",
+                    ...(page?.columns?.separator && index > 0
+                      ? {
+                          borderInlineStart: "1px solid #999",
+                          paddingInlineStart: "6pt",
+                        }
+                      : {}),
+                  }}
+                >
+                  {renderBlocks(blocks, context)}
+                </div>
+              ))
+            : renderBlocks(document.blocks, context)}
         </div>
       ) : (
         renderBlocks(document.blocks, context)

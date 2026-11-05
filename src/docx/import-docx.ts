@@ -168,6 +168,20 @@ export async function parseDocxPackage(
       if (value !== undefined) page.margins![side] = value / 20;
     }
     document.page = page;
+    const columns = childWord(section, "cols");
+    const count =
+      numericAttribute(columns, "num") ??
+      (columns
+        ? childElements(columns).filter((e) => e.localName === "col").length
+        : 0);
+    if (count > 1)
+      page.columns = {
+        count,
+        gapPt: (numericAttribute(columns, "space") ?? 720) / 20,
+        separator: ["1", "true", "on"].includes(
+          wordAttribute(columns!, "sep") ?? "",
+        ),
+      };
     for (const kind of ["header", "footer"] as const) {
       const variants: StoryVariants = {};
       for (const ref of childElements(section).filter(

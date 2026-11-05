@@ -8,6 +8,7 @@ export function useSearchHighlights(
   hits: SearchHit[],
   active: SearchHit | null,
   enabled: boolean,
+  scope: { id: string; start: number; end: number }[],
 ) {
   useEffect(() => {
     const root = container.current;
@@ -39,6 +40,17 @@ export function useSearchHighlights(
       }
       CSS.highlights.set("docx-search", new Highlight(...ranges));
       CSS.highlights.set("docx-search-active", new Highlight(...selected));
+      const picked: Range[] = [];
+      for (const r of scope)
+        root
+          .querySelectorAll<HTMLElement>(
+            `[data-docx-page] [data-paragraph-id="${CSS.escape(r.id)}"]`,
+          )
+          .forEach((node) => {
+            if (node.style.display !== "none")
+              picked.push(textRange(node, r.start, r.end));
+          });
+      CSS.highlights.set("docx-selection", new Highlight(...picked));
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(paint);
@@ -57,6 +69,7 @@ export function useSearchHighlights(
       cancelAnimationFrame(frame);
       CSS.highlights.delete("docx-search");
       CSS.highlights.delete("docx-search-active");
+      CSS.highlights.delete("docx-selection");
     };
-  }, [container, hits, active, enabled]);
+  }, [container, hits, active, enabled, scope]);
 }

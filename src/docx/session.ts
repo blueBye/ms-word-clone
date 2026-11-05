@@ -27,12 +27,15 @@ import {
   ensureStyle,
   readStyles,
   editStyle,
+  related,
 } from "./session-parts.js";
 import { writeTextEffects, W14 } from "./text-effects.js";
 import { selectionStyleDelta } from "../core/style-selection.js";
 import { DocumentEngine, type EngineSnapshot } from "../core/document.js";
 import type { StyleCatalog } from "../core/styles.js";
 import type { ListDefinition } from "../core/lists.js";
+import { imageData, hyperlink } from "../core/assets.js";
+import { addRelation, imageContentType, imageRun } from "./insert.js";
 
 export type {
   EditCommand,
@@ -237,26 +240,35 @@ function textOf(run: Element): string {
     )
     .join("");
 }
+function textRuns(p: Element): Element[] {
+  return childElements(p).flatMap((e) =>
+    isWord(e, "r")
+      ? [e]
+      : isWord(e, "hyperlink")
+        ? childElements(e).filter((r) => isWord(r, "r"))
+        : [],
+  );
+}
 function plain(p: Element): boolean {
+  const run = (e: Element) =>
+    isWord(e, "r") &&
+    childElements(e).every(
+      (c) =>
+        isWord(c, "rPr") ||
+        isWord(c, "t") ||
+        isWord(c, "tab") ||
+        isWord(c, "cr") ||
+        (isWord(c, "br") && !wordAttribute(c, "type")),
+    );
   return childElements(p).every(
     (e) =>
       isWord(e, "pPr") ||
-      (isWord(e, "r") &&
-        childElements(e).every(
-          (c) =>
-            isWord(c, "rPr") ||
-            isWord(c, "t") ||
-            isWord(c, "tab") ||
-            isWord(c, "cr") ||
-            (isWord(c, "br") && !wordAttribute(c, "type")),
-        )),
+      run(e) ||
+      (isWord(e, "hyperlink") && childElements(e).every(run)),
   );
 }
 function textContent(p: Element) {
-  return childElements(p)
-    .filter((e) => isWord(e, "r"))
-    .map(textOf)
-    .join("");
+  return textRuns(p).map(textOf).join("");
 }
 function validText(text: string) {
   if (
@@ -571,11 +583,29 @@ function rewriteText(
   const start = command.start ?? 0,
     end = command.end ?? text.length;
   range(text, start, end);
-  const runs = childElements(p).filter((e) => isWord(e, "r"));
+  const runs = textRuns(p);
+  const links = new Map<Element, Element>();
+  const copied = (run: Element, value?: string) => {
+    const item =
+      value === undefined
+        ? (run.cloneNode(true) as Element)
+        : runWithText(run, value);
+    const parent = run.parentNode as Element | null;
+    if (parent && isWord(parent, "hyperlink")) links.set(item, parent);
+    return item;
+  };
   const base =
     runs[0] ??
     p.ownerDocument!.createElementNS(p.namespaceURI, `${p.prefix || "w"}:r`);
   const output: Element[] = [];
+  let insertionOffset = 0;
+  const insertionRun =
+    runs.find((run) => {
+      insertionOffset += textOf(run).length;
+      return start === end && start > 0
+        ? insertionOffset >= start
+        : insertionOffset > start;
+    }) ?? runs.at(-1);
   const colorAt = (position: number) => {
     let offset = 0,
       last = effective?.markProperties?.color;
@@ -603,7 +633,7 @@ function rewriteText(
         ]),
       ].sort((a, b) => a - b);
       for (let i = 0; i < cuts.length - 1; i++) {
-        const item = runWithText(
+        const item = copied(
           run,
           value.slice(cuts[i] - offset, cuts[i + 1] - offset),
         );
@@ -614,7 +644,7 @@ function rewriteText(
         output.push(item);
       }
       if (!value.length) {
-        const item = run.cloneNode(true) as Element;
+        const item = copied(run);
         if (start === 0 && end === text.length) {
           if (command.type === "clearRun") clearRun(item, inherit);
           else setRun(item, command.format, colorAt(offset));
@@ -622,42 +652,53 @@ function rewriteText(
         output.push(item);
       }
     } else {
-      if (next <= start) output.push(run.cloneNode(true) as Element);
+      if (next <= start) output.push(copied(run));
       else if (offset >= end) {
         if (!inserted) {
-          const item = runWithText(run, command.text);
+          const item = copied(insertionRun ?? run, command.text);
           if (command.format) setRun(item, command.format, colorAt(start));
           output.push(item);
           inserted = true;
         }
-        output.push(run.cloneNode(true) as Element);
+        output.push(copied(run));
       } else {
         if (start > offset)
-          output.push(runWithText(run, value.slice(0, start - offset)));
+          output.push(copied(run, value.slice(0, start - offset)));
         if (!inserted) {
-          const item = runWithText(run, command.text);
+          const item = copied(insertionRun ?? run, command.text);
           if (command.format) setRun(item, command.format, colorAt(start));
           output.push(item);
           inserted = true;
         }
-        if (end < next)
-          output.push(runWithText(run, value.slice(end - offset)));
+        if (end < next) output.push(copied(run, value.slice(end - offset)));
       }
     }
     offset = next;
   }
   if (command.type === "text" && !inserted) {
-    const item = runWithText(runs.at(-1) ?? base, command.text);
+    const item = copied(runs.at(-1) ?? base, command.text);
     if (command.format) setRun(item, command.format, colorAt(start));
     output.push(item);
   }
   if (command.type === "run" && !runs.length) {
-    const item = runWithText(base, "");
+    const item = copied(base, "");
     setRun(item, command.format, colorAt(0));
     output.push(item);
   }
-  for (const run of runs) p.removeChild(run);
-  for (const run of output) p.appendChild(run);
+  for (const child of childElements(p))
+    if (isWord(child, "r") || isWord(child, "hyperlink")) p.removeChild(child);
+  let previous: Element | undefined, wrapper: Element | undefined;
+  for (const run of output) {
+    const link = links.get(run);
+    if (link) {
+      if (link !== previous) {
+        wrapper = link.cloneNode(false) as Element;
+        p.appendChild(wrapper);
+      }
+      wrapper!.appendChild(run);
+    } else p.appendChild(run);
+    previous = link;
+  }
 }
 function clearRun(run: Element, inherit?: RunFormat) {
   const pr = childWord(run, "rPr");
@@ -767,6 +808,7 @@ export async function openDocxSession(
         lockedReason = "This document has editing protection.";
     }
   let sourceParts = new Map<string, string>();
+  let binaryParts = new Map<string, Uint8Array>();
   // Supported edits preserve the number of sections; avoid parsing XML from UI capability getters.
   const canSetPage =
     !lockedReason &&
@@ -784,6 +826,7 @@ export async function openDocxSession(
   type Revision = {
     model: EngineSnapshot;
     parts: Map<string, string>;
+    binary: Map<string, Uint8Array>;
     ids: Map<string, string>;
     sources: Map<string, Source>;
     queued: EditCommand[];
@@ -796,11 +839,19 @@ export async function openDocxSession(
   function overlay(changes: Map<string, string>): DocxPackage {
     return {
       ...pkg,
-      hasPart: (p) => changes.has(p) || pkg.hasPart(p),
-      listParts: () => [...new Set([...pkg.listParts(), ...changes.keys()])],
+      hasPart: (p) => changes.has(p) || binaryParts.has(p) || pkg.hasPart(p),
+      listParts: () => [
+        ...new Set([
+          ...pkg.listParts(),
+          ...changes.keys(),
+          ...binaryParts.keys(),
+        ]),
+      ],
       readText: async (p) => changes.get(p) ?? pkg.readText(p),
       readBinary: async (p) =>
-        changes.has(p) ? strToU8(changes.get(p)!) : pkg.readBinary(p),
+        changes.has(p)
+          ? strToU8(changes.get(p)!)
+          : (binaryParts.get(p) ?? pkg.readBinary(p)),
     };
   }
   async function load(
@@ -940,6 +991,19 @@ export async function openDocxSession(
         );
       } else {
         const second = p!.cloneNode(true) as Element;
+        let offset = 0;
+        const runs = childElements(second).filter((e) => isWord(e, "r"));
+        const caret =
+          runs.find((r) => {
+            offset += textOf(r).length;
+            return command.start > 0 ? offset >= command.start : offset > 0;
+          }) ?? runs.at(-1);
+        const carry = runWithText(
+          caret ??
+            second.ownerDocument!.createElementNS(second.namespaceURI, "w:r"),
+          "",
+        );
+        if (command.format) setRun(carry, command.format);
         rewriteText(p!, {
           type: "text",
           id: command.id,
@@ -954,6 +1018,18 @@ export async function openDocxSession(
           end: command.end,
           text: "",
         });
+        if (!textContent(second)) {
+          for (const run of childElements(second).filter((e) => isWord(e, "r")))
+            second.removeChild(run);
+          second.appendChild(carry);
+          const mark = childWord(carry, "rPr");
+          if (mark) {
+            const pr = properties(second, "pPr");
+            const old = childWord(pr, "rPr");
+            if (old) pr.removeChild(old);
+            pr.appendChild(mark.cloneNode(true));
+          }
+        }
         // A section boundary belongs to the last of the two resulting paragraphs.
         const firstPr = childWord(p!, "pPr"),
           section = firstPr && childWord(firstPr, "sectPr");
@@ -1112,6 +1188,213 @@ export async function openDocxSession(
           overlay(updated),
           main,
         );
+    } else if (command.type === "columns") {
+      if (!canSetPage)
+        throw new Error(
+          "Column editing currently supports single-section documents.",
+        );
+      const count = finite(command.count, 1, 4);
+      if (!Number.isInteger(count))
+        throw new Error("Use a whole number of columns.");
+      const body = childWord(root, "body")!,
+        cols = ensure(ensure(body, "sectPr"), "cols");
+      for (const child of childElements(cols)) cols.removeChild(child);
+      attr(cols, "num", count);
+      attr(cols, "space", Math.round(finite(command.gapPt ?? 36, 0, 144) * 20));
+      attr(cols, "equalWidth", "1");
+      attr(cols, "sep", command.separator ? "1" : "0");
+    } else if (command.type === "insertImage") {
+      const data = imageData(command.dataUrl),
+        width = finite(command.widthPt, 1, 15840),
+        height = finite(command.heightPt, 1, 15840);
+      const folder = part.split("/").slice(0, -1).join("/");
+      let n = 1;
+      while (
+        overlay(updated).hasPart(
+          `${folder}/media/editor-image-${n}.${data.extension}`,
+        )
+      )
+        n++;
+      const path = `${folder}/media/editor-image-${n}.${data.extension}`;
+      const relation = await addRelation(
+        updated,
+        overlay(updated),
+        part,
+        `media/editor-image-${n}.${data.extension}`,
+        "image",
+        root.namespaceURI!,
+      );
+      binaryParts = new Map(binaryParts).set(path, data.bytes);
+      await imageContentType(updated, overlay(updated), path, data.mime);
+      const parent = p?.parentNode ?? childWord(root, "body");
+      if (!parent) throw new Error("Select an insertion point.");
+      const imageBody = childWord(root, "body");
+      const next =
+        (p
+          ? p.nextSibling
+          : imageBody
+            ? childWord(imageBody, "sectPr")
+            : null) ?? null;
+      const para = root.ownerDocument!.createElementNS(
+        root.namespaceURI,
+        "w:p",
+      );
+      const drawingId =
+        Math.max(
+          0,
+          ...descendants(root, "docPr").map(
+            (e) => Number(e.getAttribute("id")) || 0,
+          ),
+        ) + 1;
+      para.appendChild(
+        imageRun(para, relation, width, height, command.alt, drawingId),
+      );
+      parent.insertBefore(para, next);
+      const after = root.ownerDocument!.createElementNS(
+        root.namespaceURI,
+        "w:p",
+      );
+      parent.insertBefore(after, next);
+      const id = `p${nextIdentity++}`;
+      known.set(after, id);
+      nextSelection = { id, start: 0, end: 0 };
+    } else if (command.type === "link") {
+      if (!capability(command.id).text)
+        throw new Error("Select editable text to insert a link.");
+      const href = hyperlink(command.href),
+        value =
+          command.text ?? textContent(p!).slice(command.start, command.end);
+      if (!value) throw new Error("Enter text to display.");
+      rewriteText(
+        p!,
+        {
+          type: "text",
+          id: command.id,
+          start: command.start,
+          end: command.end,
+          text: value,
+        },
+        source?.paragraph,
+      );
+      const link = root.ownerDocument!.createElementNS(
+        root.namespaceURI,
+        "w:hyperlink",
+      );
+      if (href.startsWith("#")) attr(link, "anchor", href.slice(1));
+      else {
+        const relation = await addRelation(
+          updated,
+          overlay(updated),
+          part,
+          href,
+          "hyperlink",
+          root.namespaceURI!,
+          true,
+        );
+        link.setAttributeNS(
+          root.namespaceURI!.includes("purl.oclc.org")
+            ? "http://purl.oclc.org/ooxml/officeDocument/relationships"
+            : "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+          "r:id",
+          relation,
+        );
+      }
+      let offset = 0;
+      for (const run of textRuns(p!)) {
+        const start = offset;
+        offset += textOf(run).length;
+        if (start >= command.start && offset <= command.start + value.length) {
+          const parent = run.parentNode!;
+          if (!link.parentNode)
+            p!.insertBefore(link, parent === p ? run : parent);
+          setRun(run, { color: "#0563C1", underline: "single" });
+          link.appendChild(run);
+          if (parent !== p && !parent.childNodes.length) p!.removeChild(parent);
+        }
+      }
+    } else if (command.type === "story") {
+      const body = childWord(root, "body");
+      if (!body || descendants(body, "sectPr").length > 1)
+        throw new Error(
+          "Header and footer creation currently supports single-section documents.",
+        );
+      const section = ensure(body, "sectPr"),
+        variant = command.variant ?? "default";
+      const ref = childElements(section).find(
+        (e) =>
+          isWord(e, `${command.kind}Reference`) &&
+          wordAttribute(e, "type") === variant,
+      );
+      if (command.remove) {
+        if (ref) section.removeChild(ref);
+      } else {
+        const rels = await readRelationships(overlay(updated), main);
+        const oldId =
+          ref?.getAttributeNS(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            "id",
+          ) ??
+          ref?.getAttributeNS(
+            "http://purl.oclc.org/ooxml/officeDocument/relationships",
+            "id",
+          );
+        const existing = oldId && rels.get(oldId);
+        const story =
+          existing && !existing.external
+            ? {
+                path: existing.target,
+                root: parseXml(await overlay(updated).readText(existing.target))
+                  .documentElement!,
+              }
+            : await related(
+                command.kind,
+                updated,
+                overlay(updated),
+                main,
+                false,
+              );
+        if (!ref) {
+          const reference = section.ownerDocument!.createElementNS(
+            section.namespaceURI,
+            `w:${command.kind}Reference`,
+          );
+          section.insertBefore(reference, section.firstChild);
+          attr(reference, "type", variant);
+          const relNS = root.namespaceURI?.includes("purl.oclc.org")
+            ? "http://purl.oclc.org/ooxml/officeDocument/relationships"
+            : "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+          reference.setAttributeNS(relNS, "r:id", (story as { id: string }).id);
+        }
+        if (
+          command.pageNumber ||
+          command.appendText ||
+          !childWord(story.root, "p")
+        ) {
+          const para = story.root.ownerDocument!.createElementNS(
+            root.namespaceURI,
+            "w:p",
+          );
+          setParagraph(para, { alignment: command.alignment ?? "left" });
+          if (command.pageNumber) {
+            const field = ensure(para, "fldSimple");
+            attr(field, "instr", "PAGE");
+            field.appendChild(
+              runWithText(
+                field.ownerDocument!.createElementNS(field.namespaceURI, "w:r"),
+                "1",
+              ),
+            );
+          } else {
+            const run = ensure(para, "r");
+            para.replaceChild(runWithText(run, ""), run);
+          }
+          story.root.appendChild(para);
+        }
+        updated.set(
+          story.path,
+          serializer.serializeToString(story.root.ownerDocument!),
+        );
+      }
     } else if (command.type === "page") {
       if (descendants(root, "sectPr").length > 1)
         throw new Error(
@@ -1282,6 +1565,7 @@ export async function openDocxSession(
     return {
       model: engine.snapshot(),
       parts: sourceParts,
+      binary: binaryParts,
       ids: sourceIdentities,
       sources,
       queued,
@@ -1291,6 +1575,7 @@ export async function openDocxSession(
   }
   function restore(revision: Revision) {
     sourceParts = revision.parts;
+    binaryParts = revision.binary;
     sourceIdentities = revision.ids;
     sources = revision.sources;
     queued = revision.queued;
@@ -1454,10 +1739,14 @@ export async function openDocxSession(
         const changes = sourceParts;
         if (!changes.size) return original.slice();
         const entries: Record<string, Uint8Array> = {};
-        for (const path of new Set([...pkg.listParts(), ...changes.keys()]))
+        for (const path of new Set([
+          ...pkg.listParts(),
+          ...changes.keys(),
+          ...binaryParts.keys(),
+        ]))
           entries[path] = changes.has(path)
             ? strToU8(changes.get(path)!)
-            : await pkg.readBinary(path);
+            : (binaryParts.get(path) ?? (await pkg.readBinary(path)));
         return zipSync(entries);
       }),
   };

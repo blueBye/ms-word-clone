@@ -46,19 +46,22 @@ function val(parent: Element, name: string, text: string | number) {
 }
 
 /** Add a relationship-backed XML part without rebuilding unrelated package parts. */
-async function related(
-  kind: "styles" | "numbering",
+export async function related(
+  kind: "styles" | "numbering" | "header" | "footer",
   changes: Map<string, string>,
   pkg: DocxPackage,
   main: string,
+  reuse = true,
 ) {
   const relationships = await readRelationships(pkg, main);
-  const found = [...relationships.values()].find(
-    (r) => r.type === kind && !r.external,
+  const entry = [...relationships].find(
+    ([, r]) => reuse && r.type === kind && !r.external,
   );
+  const found = entry?.[1];
   if (found) {
     if (!pkg.hasPart(found.target)) throw new Error(`Missing ${kind} part.`);
     return {
+      id: entry![0],
       path: found.target,
       root: parseXml(await pkg.readText(found.target)).documentElement!,
     };
@@ -103,8 +106,11 @@ async function related(
   types.appendChild(type);
   changes.set("[Content_Types].xml", serialize(types));
   return {
+    id: `rId${index}`,
     path,
-    root: parseXml(`<w:${kind} xmlns:w="${w}"/>`).documentElement!,
+    root: parseXml(
+      `<w:${kind === "header" ? "hdr" : kind === "footer" ? "ftr" : kind} xmlns:w="${w}"/>`,
+    ).documentElement!,
   };
 }
 

@@ -8,6 +8,10 @@ import {
   finite,
 } from "./text.js";
 import { ListStore } from "./lists.js";
+import { runAtPosition } from "./selection.js";
+import { runProperties } from "./text.js";
+import { mergeRun } from "./format.js";
+import { imageData } from "./assets.js";
 
 export function editStructure(
   document: DocumentIR,
@@ -72,6 +76,22 @@ export function editStructure(
             }),
             id: newId(),
           };
+          if (!paragraphText(second)) {
+            const run = runAtPosition(p, command.start);
+            const direct = mergeRun(
+              run?.directProperties ?? {},
+              runProperties(command.format ?? {}),
+            );
+            second.children = [
+              {
+                type: "text",
+                text: "",
+                properties: direct,
+                directProperties: direct,
+              },
+            ];
+            second.directMarkProperties = direct;
+          }
           result.splice(index, 1, first, second);
           selection = { id: second.id, start: 0, end: 0 };
         }
@@ -133,10 +153,16 @@ export function editStructure(
         );
       } else if (
         command.type === "insertParagraph" ||
-        command.type === "insertTable"
-      )
+        command.type === "insertTable" ||
+        command.type === "insertImage"
+      ) {
         result.splice(index + 1, 0, makeBlock(command));
-      else throw new Error(`Unsupported document command: ${command.type}`);
+        if (command.type === "insertImage") {
+          const next = paragraph();
+          result.splice(index + 2, 0, next);
+          selection = { id: next.id!, start: 0, end: 0 };
+        }
+      } else throw new Error(`Unsupported document command: ${command.type}`);
     }
     return result.map((b): Block => {
       if (b.type === "table")
@@ -158,7 +184,10 @@ export function editStructure(
     });
   };
   const makeBlock = (
-    insert: Extract<EditCommand, { type: "insertParagraph" | "insertTable" }>,
+    insert: Extract<
+      EditCommand,
+      { type: "insertParagraph" | "insertTable" | "insertImage" }
+    >,
   ): Block => {
     if (insert.type === "insertParagraph") {
       validateText(insert.text);
@@ -166,6 +195,21 @@ export function editStructure(
       if (insert.pageBreakBefore)
         p.directProperties = { pageBreakBefore: true };
       return p;
+    }
+    if (insert.type === "insertImage") {
+      imageData(insert.dataUrl);
+      return {
+        ...paragraph(),
+        children: [
+          {
+            type: "drawing",
+            widthPt: finite(insert.widthPt, 1, 15840),
+            heightPt: finite(insert.heightPt, 1, 15840),
+            alt: insert.alt,
+            image: { dataUrl: insert.dataUrl },
+          },
+        ],
+      };
     }
     const rows = finite(insert.rows, 1, 50),
       columns = finite(insert.columns, 1, 20);
@@ -194,11 +238,18 @@ export function editStructure(
     }
   if (!found) {
     if (
-      (command.type === "insertParagraph" || command.type === "insertTable") &&
+      (command.type === "insertParagraph" ||
+        command.type === "insertTable" ||
+        command.type === "insertImage") &&
       !command.id
-    )
+    ) {
       result.blocks = [...result.blocks, makeBlock(command)];
-    else throw new Error("Select a paragraph in the current document.");
+      if (command.type === "insertImage") {
+        const next = paragraph();
+        result.blocks.push(next);
+        selection = { id: next.id!, start: 0, end: 0 };
+      }
+    } else throw new Error("Select a paragraph in the current document.");
   }
   return { document: result, selection };
 }
