@@ -4,6 +4,8 @@ This directory contains the **current usage and API guides** as well as **histor
 
 ## Start here
 
+For deployment settings and the static-export workflow, see [Cloudflare Pages deployment](../DEPLOY_CLOUDFLARE_PAGES.md).
+
 | Document | Audience | Contents |
 | --- | --- | --- |
 | [Getting started](getting-started.md) | Users, contributors | Prerequisites, installation, commands, troubleshooting |

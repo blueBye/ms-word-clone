@@ -30,12 +30,15 @@
   ],
   "scripts": {
     "dev": "npm run build:engine && npm --prefix apps/web run dev",
-    "build": "npm run build:engine && npm run build:web",
+    "build": "npm run check:pages && npm run build:engine && npm run build:web && npm run verify:pages",
     "build:engine": "tsc -p tsconfig.build.json",
     "build:web": "npm --prefix apps/web run build",
-    "start": "npm --prefix apps/web run start",
+    "start": "node scripts/preview-static.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm --prefix apps/web run typecheck",
-    "test": "vitest run"
+    "test": "vitest run && node scripts/cloudflare-smoke.mjs",
+    "check:pages": "node scripts/check-cloudflare-config.mjs",
+    "verify:pages": "node scripts/verify-cloudflare-export.mjs",
+    "test:cloudflare": "node scripts/cloudflare-smoke.mjs"
   },
   "dependencies": {
     "@electric-sql/d2ts": "0.1.8",

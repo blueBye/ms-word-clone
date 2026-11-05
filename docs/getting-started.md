@@ -35,7 +35,7 @@ A typical first test:
 | `pnpm build:engine` | Build the importable TypeScript package into `dist/` |
 | `pnpm build:web` | Build the Next.js application (requires the engine first) |
 | `pnpm build` | Build engine, then Next.js |
-| `pnpm start` | Start the production server after a successful build |
+| `pnpm start` | Preview the static export locally after a successful build |
 | `pnpm typecheck` | Type-check root engine and web app |
 | `pnpm test` | Run the Vitest suite |
 | `node scripts/create-sample.mjs` | Generate the bundled sample DOCX |
@@ -75,3 +75,7 @@ Do not commit proprietary font files unless you have redistribution rights.
 **Build or test fails:** run the exact failing command alone and inspect the error. `pnpm build` compiles the app but does not run the test suite. Report the failing command, Node/pnpm versions, and an anonymized reproduction.
 
 See [Using the editor](using-editor.md), [Feature status](feature-status.md), and [Known limitations](limitations.md).
+
+## Cloudflare Pages hosting
+
+The editor builds to `apps/web/out` using Next.js `output: 'export'`. Cloudflare must build from the repository root using `pnpm run build` (to compile the engine first) and deploy `apps/web/out`. No Node.js server or Wrangler deploy command is used. See [Cloudflare Pages deployment](../DEPLOY_CLOUDFLARE_PAGES.md).

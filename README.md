@@ -17,6 +17,12 @@ Open, edit, and download `.docx` documents in a Next.js workspace. The project s
 
 The original DOCX package is retained by the editing session. **An unchanged document exports as its original bytes**; supported edits rewrite selected content while preserving unrelated package parts where possible. This does **not** guarantee that arbitrary Word content can be edited safely.
 
+## Deploy on Cloudflare Pages
+
+This browser-only editor supports **Cloudflare Pages as a static Next.js export**. No backend or Workers runtime is required. Because this is a workspace with a separately built engine, Cloudflare must run the **repository-root** command `pnpm run build` and publish **`apps/web/out`** (not `out`).
+
+See the **[step-by-step Cloudflare Pages deployment guide](DEPLOY_CLOUDFLARE_PAGES.md)** for the exact dashboard settings, local verification, and troubleshooting.
+
 ## Quick start
 
 **Requirements:** Node.js **20.9+** and **pnpm** (lockfile v9; pnpm 9+ recommended).
@@ -35,7 +41,7 @@ Open **http://127.0.0.1:3000**. The app loads a bundled demonstration document i
 | --- | --- |
 | `pnpm dev` | Build the engine and start the Next.js development server |
 | `pnpm build` | Build engine and production web app |
-| `pnpm start` | Start the already-built production web app |
+| `pnpm start` | Preview the generated static site locally (after `pnpm build`) |
 | `pnpm build:engine` | Compile the reusable engine to `dist/` |
 | `pnpm typecheck` | Type-check engine and application |
 | `pnpm test` | Run the Vitest test suite |

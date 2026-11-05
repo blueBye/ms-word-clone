@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "start": "node ../../scripts/preview-static.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

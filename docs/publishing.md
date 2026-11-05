@@ -43,3 +43,5 @@ Avoid claiming “Microsoft Word compatible” without qualification. The editor
 - Pin documentation and report issues with reproducible synthetic samples.
 - Consider GitHub Actions CI after dependency installation and the first verified clean test/build run.
 - Tag releases only after running checks and documenting the feature/compatibility scope.
+
+For GitHub-hosted deployment through Cloudflare Pages, follow [the monorepo deployment guide](../DEPLOY_CLOUDFLARE_PAGES.md) and verify the static export before tagging a release.
