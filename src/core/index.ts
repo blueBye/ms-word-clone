@@ -18,3 +18,4 @@ export type { SearchOptions, SearchHit, SearchDirection } from "./search.js";
 export type { ListDefinition, ListLevel } from "./lists.js";
 export { changeCase } from "./case.js";
 export { runAtPosition, similarFormatting } from "./selection.js";
+export { pageForParagraph, splitSections, sectionTarget } from "./sections.js";

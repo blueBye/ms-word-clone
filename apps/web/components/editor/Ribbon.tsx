@@ -12,6 +12,7 @@ import {
   TablePicker,
 } from "./RibbonControls";
 import { RibbonIcon } from "./RibbonIcon";
+import { ArrangeControls } from "./ArrangeControls";
 
 export type RibbonTab = "Home" | "Insert" | "Layout";
 export interface RibbonProps {
@@ -23,6 +24,8 @@ export interface RibbonProps {
   canFormat: boolean;
   canPage: boolean;
   families: string[];
+  objectCount?: number;
+  hasGroup?: boolean;
   onRun: (format: RunFormat) => void;
   onParagraph: (format: ParagraphFormat) => void;
   onAction: (name: string) => void;
@@ -36,6 +39,8 @@ export function Ribbon({
   canPage,
   onParagraph,
   onAction,
+  objectCount = 0,
+  hasGroup = false,
 }: RibbonProps) {
   const paragraphDisabled = disabled || !selected;
   const pageDisabled = disabled || !canPage;
@@ -122,7 +127,16 @@ export function Ribbon({
         <>
           <Group label="Pages">
             <div className="office-stack">
-              {command("Cover Page", "cover", false)}
+              <Dropdown label="Cover Page" icon="cover">
+                <Choice
+                  label="Insert Cover Page…"
+                  onClick={() => onAction("dialog:cover")}
+                />
+                <Choice
+                  label="Remove Current Cover Page"
+                  onClick={() => onAction("cover:remove")}
+                />
+              </Dropdown>
               <Command
                 label="Blank Page"
                 icon="blank"
@@ -133,7 +147,7 @@ export function Ribbon({
                 label="Page Break"
                 icon="pageBreak"
                 disabled={paragraphDisabled}
-                onClick={() => onParagraph({ pageBreakBefore: true })}
+                onClick={() => onAction("break:page")}
               />
             </div>
           </Group>
@@ -153,22 +167,37 @@ export function Ribbon({
                 icon="table"
                 onClick={() => onAction("table")}
               />
-              <Choice label="Draw Table" disabled />
-              <Choice label="Convert Text to Table…" disabled />
-              <Choice label="Excel Spreadsheet" disabled />
-              <Choice label="Quick Tables" disabled />
+              <Choice
+                label="Draw Table"
+                onClick={() => onAction("dialog:drawTable")}
+              />
+              <Choice
+                label="Convert Text to Table…"
+                disabled={!canFormat}
+                onClick={() => onAction("dialog:convertTable")}
+              />
+              <Choice
+                label="Excel Spreadsheet"
+                onClick={() => onAction("asset:spreadsheet")}
+              />
+              <Choice
+                label="Quick Tables"
+                onClick={() => onAction("dialog:quickTable")}
+              />
             </Dropdown>
           </Group>
           <Group label="Illustrations">
             {command("Pictures", "picture", true, "picture")}
-            {command("Shapes", "shapes")}
-            {command("Icons", "icons")}
-            {command("3D Models", "model")}
-            {command("SmartArt", "smartArt")}
-            {command("Chart", "chart")}
-            {command("Screenshot", "screenshot")}
+            {command("Shapes", "shapes", true, "dialog:shapes")}
+            {command("Icons", "icons", true, "dialog:icons")}
+            {command("3D Models", "model", true, "asset:model3d")}
+            {command("SmartArt", "smartArt", true, "dialog:smartArt")}
+            {command("Chart", "chart", true, "dialog:chart")}
+            {command("Screenshot", "screenshot", true, "screenshot")}
           </Group>
-          <Group label="Media">{command("Online Videos", "video")}</Group>
+          <Group label="Media">
+            {command("Online Videos", "video", true, "video")}
+          </Group>
           <Group label="Links">
             <div className="office-stack">
               <Command
@@ -177,11 +206,18 @@ export function Ribbon({
                 disabled={disabled || !canFormat}
                 onClick={() => onAction("link")}
               />
-              {command("Bookmark", "bookmark", false)}
-              {command("Cross-reference", "reference", false)}
+              {command("Bookmark", "bookmark", false, "dialog:bookmark")}
+              {command(
+                "Cross-reference",
+                "reference",
+                false,
+                "dialog:reference",
+              )}
             </div>
           </Group>
-          <Group label="Comments">{command("Comment", "comment")}</Group>
+          <Group label="Comments">
+            {command("Comment", "comment", true, "dialog:comment")}
+          </Group>
           <Group label="Header & Footer">
             {(["Header", "Footer"] as const).map((label) => (
               <Dropdown
@@ -223,24 +259,38 @@ export function Ribbon({
             </Dropdown>
           </Group>
           <Group label="Text">
-            {command("Text Box", "textBox")}
-            {command("Quick Parts", "quickParts")}
-            {command("WordArt", "wordArt")}
-            {command("Drop Cap", "dropCap")}
+            {command("Text Box", "textBox", true, "dialog:textBox")}
+            {command("Quick Parts", "quickParts", true, "dialog:quickParts")}
+            {command("WordArt", "wordArt", true, "dialog:wordArt")}
+            {command("Drop Cap", "dropCap", true, "dialog:dropCap")}
             <div className="office-stack">
-              {command("Signature Line", "signature", false)}
+              {command(
+                "Signature Line",
+                "signature",
+                false,
+                "dialog:signature",
+              )}
               <Command
                 label="Date & Time"
                 icon="date"
                 disabled={disabled || !canFormat}
-                onClick={() => onAction("date")}
+                onClick={() => onAction("dialog:dateOptions")}
               />
-              {command("Object", "object", false)}
+              <Dropdown label="Object" icon="object" disabled={disabled}>
+                <Choice
+                  label="Object…"
+                  onClick={() => onAction("asset:object")}
+                />
+                <Choice
+                  label="Text from File…"
+                  onClick={() => onAction("textFromFile")}
+                />
+              </Dropdown>
             </div>
           </Group>
           <Group label="Symbols">
             <div className="office-stack">
-              {command("Equation", "equation", false)}
+              {command("Equation", "equation", false, "dialog:equation")}
               <Dropdown
                 label="Symbol"
                 icon="symbol"
@@ -284,6 +334,10 @@ export function Ribbon({
                   label="Nonbreaking Space"
                   onClick={() => onAction("symbol:\u00a0")}
                 />
+                <Choice
+                  label="More Symbols…"
+                  onClick={() => onAction("dialog:symbols")}
+                />
               </Dropdown>
             </div>
           </Group>
@@ -326,11 +380,18 @@ export function Ribbon({
                 description={"Top: 1″   Bottom: 1″   Left: 2″   Right: 2″"}
                 onClick={() => onAction("margins:72,144,72,144")}
               />
-              <Choice label="Mirrored" disabled />
+              <Choice
+                label="Mirrored"
+                onClick={() => onAction("layout:mirror")}
+              />
               <hr />
               <Choice
                 label="Custom Margins…"
                 onClick={() => onAction("page")}
+              />
+              <Choice
+                label="Layout Options…"
+                onClick={() => onAction("dialog:layoutOptions")}
               />
             </Dropdown>
             <Dropdown
@@ -396,6 +457,10 @@ export function Ribbon({
                   onClick={() => onAction(`columns:${count}`)}
                 />
               ))}
+              <Choice
+                label="More Columns…"
+                onClick={() => onAction("dialog:columnsOptions")}
+              />
             </Dropdown>
             <div className="office-stack">
               <Dropdown
@@ -408,19 +473,83 @@ export function Ribbon({
                   label="Page"
                   icon="pageBreak"
                   description="Start the paragraph on the next page."
-                  onClick={() => onParagraph({ pageBreakBefore: true })}
+                  onClick={() => onAction("break:page")}
                 />
-                <Choice label="Column" disabled />
-                <Choice label="Text Wrapping" disabled />
+                <Choice
+                  label="Column"
+                  onClick={() => onAction("break:column")}
+                />
+                <Choice
+                  label="Text Wrapping"
+                  onClick={() => onAction("break:wrap")}
+                />
                 <p className="office-menu-heading">Section Breaks</p>
-                {["Next Page", "Continuous", "Even Page", "Odd Page"].map(
-                  (label) => (
-                    <Choice key={label} label={label} disabled />
-                  ),
-                )}
+                {[
+                  ["Next Page", "nextPage"],
+                  ["Continuous", "continuous"],
+                  ["Even Page", "evenPage"],
+                  ["Odd Page", "oddPage"],
+                ].map(([label, value]) => (
+                  <Choice
+                    key={label}
+                    label={label}
+                    onClick={() => onAction(`section:${value}`)}
+                  />
+                ))}
               </Dropdown>
-              {command("Line Numbers", "lineNumbers", false)}
-              {command("Hyphenation", "hyphenation", false)}
+              <Dropdown
+                label="Line Numbers"
+                icon="lineNumbers"
+                disabled={pageDisabled}
+              >
+                {[
+                  ["None", "none"],
+                  ["Continuous", "continuous"],
+                  ["Restart Each Page", "page"],
+                  ["Restart Each Section", "section"],
+                ].map(([label, value]) => (
+                  <Choice
+                    key={value}
+                    label={label}
+                    onClick={() => onAction(`lineNumbers:${value}`)}
+                  />
+                ))}
+                <Choice
+                  label="Suppress for Current Paragraph"
+                  onClick={() =>
+                    onParagraph({
+                      suppressLineNumbers:
+                        !selected?.properties.suppressLineNumbers,
+                    })
+                  }
+                />
+                <Choice
+                  label="Line Numbering Options…"
+                  onClick={() => onAction("dialog:lineNumbers")}
+                />
+              </Dropdown>
+              <Dropdown
+                label="Hyphenation"
+                icon="hyphenation"
+                disabled={pageDisabled}
+              >
+                <Choice
+                  label="None"
+                  onClick={() => onAction("hyphenation:none")}
+                />
+                <Choice
+                  label="Automatic"
+                  onClick={() => onAction("hyphenation:auto")}
+                />
+                <Choice
+                  label="Manual…"
+                  onClick={() => onAction("dialog:hyphenation")}
+                />
+                <Choice
+                  label="Hyphenation Options…"
+                  onClick={() => onAction("dialog:hyphenation")}
+                />
+              </Dropdown>
             </div>
           </Group>
           <Group label="Paragraph" more={() => onAction("paragraph")}>
@@ -465,16 +594,11 @@ export function Ribbon({
             ))}
           </Group>
           <Group label="Arrange">
-            {command("Position", "position")}
-            {command("Wrap Text", "wrap")}
-            {command("Bring Forward", "forward")}
-            {command("Send Backward", "backward")}
-            {command("Selection Pane", "selection", true, "outline")}
-            <div className="office-stack">
-              {command("Align", "alignLeft", false)}
-              {command("Group", "group", false)}
-              {command("Rotate", "rotate", false)}
-            </div>
+            <ArrangeControls
+              count={objectCount}
+              group={hasGroup}
+              onAction={onAction}
+            />{" "}
           </Group>
         </>
       )}

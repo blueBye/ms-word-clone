@@ -2464,3 +2464,66 @@ button:hover:not(:disabled) {
     display: none;
   }
 }
+/* Object selection is separate from text selection. */
+[data-docx-drawing][data-object-selected] {
+  outline: 2px solid #3778bd;
+  outline-offset: 3px;
+}
+.shape-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(75px, 1fr));
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.shape-picker button,
+.object-list button {
+  border: 1px solid transparent;
+  padding: 7px;
+  text-align: left;
+  font-size: 12px;
+}
+.shape-picker button.selected,
+.object-list button.selected {
+  background: #e5edf5;
+  border-color: #a6bfd7;
+}
+.object-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 15px;
+}
+.object-properties .field {
+  margin-bottom: 9px;
+}
+.comment-card {
+  padding: 12px 0;
+  border-bottom: 1px solid #ddd;
+}
+.comment-card small {
+  display: block;
+  color: #777;
+  margin: 4px 0;
+}
+.comment-card textarea {
+  width: 100%;
+  min-height: 70px;
+  padding: 8px;
+}
+.comment-card button {
+  font-size: 11px;
+  padding: 6px;
+}
+.bookmark-list > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px;
+}
+.table-drawing-canvas {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: 210px;
+  cursor: crosshair;
+  touch-action: none;
+  margin: 10px 0;
+}

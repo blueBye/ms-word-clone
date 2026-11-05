@@ -623,6 +623,7 @@ export function usePageEditor(options: Options) {
       else apply();
     };
     const down = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
       const target = (event.target as Element).closest<HTMLElement>(
         "[data-paragraph-id]",
       );

@@ -3,6 +3,7 @@ import type {
   DocumentIR,
   Paragraph,
   RunProperties,
+  DrawingInline,
 } from "../model/document.js";
 import { getParagraphs } from "../model/traversal.js";
 import type {
@@ -27,6 +28,9 @@ import { editStructure } from "./structure.js";
 import { searchMatches, type SearchOptions } from "./search.js";
 import { paragraphLocations, patchParagraphs } from "./tree.js";
 import { hyperlink } from "./assets.js";
+import { validateDrawing } from "./objects.js";
+import { arrangeObjects } from "./arrange.js";
+import { sectionTarget, pageForParagraph } from "./sections.js";
 
 export interface EngineSnapshot {
   document: DocumentIR;
@@ -47,6 +51,12 @@ export interface EngineOptions {
 export function allParagraphs(document: DocumentIR) {
   const all = [
     ...getParagraphs(document.blocks),
+    ...getParagraphs(document.blocks).flatMap((p) =>
+      [
+        ...Object.values(p.section?.headers ?? {}),
+        ...Object.values(p.section?.footers ?? {}),
+      ].flatMap((b) => getParagraphs(b ?? [])),
+    ),
     ...Object.values(document.headers ?? {}).flatMap((b) =>
       getParagraphs(b ?? []),
     ),
@@ -60,17 +70,21 @@ function replaceBlocks(
   blocks: Block[],
   changes: Map<string, Paragraph>,
 ): Block[] {
+  const drawing = (d: DrawingInline): DrawingInline => {
+    const blocks = d.blocks ? replaceBlocks(d.blocks, changes) : undefined,
+      children = d.children?.map(drawing);
+    return blocks === d.blocks &&
+      (!children || children.every((c, i) => c === d.children![i]))
+      ? d
+      : { ...d, blocks, children };
+  };
   let changed = false;
   const result = blocks.map((block): Block => {
     let next = block;
     if (block.type === "paragraph") {
       next = changes.get(block.id!) ?? block;
       const children = next.children.map((inline) => {
-        if (inline.type !== "drawing" || !inline.blocks) return inline;
-        const nested = replaceBlocks(inline.blocks, changes);
-        return nested === inline.blocks
-          ? inline
-          : { ...inline, blocks: nested };
+        return inline.type === "drawing" ? drawing(inline) : inline;
       });
       if (
         children.some((child, i) => child !== (next as Paragraph).children[i])
@@ -367,6 +381,12 @@ export class DocumentEngine implements DocumentSession {
     this.searchCache = undefined;
     const paragraphs = [
       ...getParagraphs(this.value.blocks),
+      ...getParagraphs(this.value.blocks).flatMap((p) =>
+        [
+          ...Object.values(p.section?.headers ?? {}),
+          ...Object.values(p.section?.footers ?? {}),
+        ].flatMap((b) => getParagraphs(b ?? [])),
+      ),
       ...Object.values(this.value.headers ?? {}).flatMap((b) =>
         getParagraphs(b ?? []),
       ),
@@ -415,23 +435,219 @@ export class DocumentEngine implements DocumentSession {
     for (const id of this.dependencies.flush()) affected.add(id);
     this.materialize(affected);
   }
+  private updatePage(
+    format: Partial<import("../model/document.js").PageLayout>,
+    id?: string,
+  ) {
+    if (id && !this.authored.has(id))
+      throw new Error("Select a paragraph in the current document.");
+    const target = sectionTarget(this.value, id);
+    if (target)
+      this.setParagraph({
+        ...target,
+        section: { ...target.section, ...format },
+      });
+    else
+      this.value = freeze({
+        ...this.value,
+        page: { ...this.value.page, ...format },
+      });
+  }
   private apply(command: EditCommand) {
     if (this.lockedReason) throw new Error(this.lockedReason);
+    if (command.type === "sectionBreak") {
+      const p = this.resolved.get(command.id);
+      if (!p || !this.value.blocks.includes(p))
+        throw new Error(
+          "Section breaks require a body paragraph outside a table.",
+        );
+      const old = structuredClone(pageForParagraph(this.value, command.id));
+      old.columns ??= { count: 1, gapPt: 36 };
+      const previousSection = sectionTarget(this.value, command.id)?.section;
+      const stories = {
+        headers: structuredClone(
+          previousSection?.headers ?? this.value.headers,
+        ),
+        footers: structuredClone(
+          previousSection?.footers ?? this.value.footers,
+        ),
+      };
+      this.apply({
+        type: "splitParagraph",
+        id: command.id,
+        start: command.start,
+        end: command.end,
+      });
+      const target = this.currentSelection!;
+      this.setParagraph({
+        ...this.resolved.get(command.id)!,
+        section: { ...old, ...stories },
+      });
+      this.updatePage({ ...old, sectionStart: command.kind }, target.id);
+      return;
+    }
+    if (command.type === "dropCap") {
+      const p = this.resolved.get(command.id);
+      if (!p || !this.value.blocks.includes(p))
+        throw new Error("Select a body paragraph outside a table.");
+      if (command.remove) {
+        if (!p.properties.dropCap) return;
+        const direct = { ...p.directProperties };
+        delete direct.dropCap;
+        this.setParagraph({ ...p, directProperties: direct });
+        this.apply({
+          type: "run",
+          id: p.id!,
+          start: 0,
+          end: paragraphText(p).length,
+          format: { fontSizePt: p.markProperties?.fontSizePt ?? 12 },
+        });
+        this.apply({ type: "joinParagraph", id: p.id!, direction: "forward" });
+      } else {
+        const length =
+          Array.from(
+            new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+              paragraphText(p),
+            ),
+          )[0]?.segment.length ?? 0;
+        if (!p.properties.dropCap && paragraphText(p).length <= length)
+          throw new Error(
+            "A drop cap needs a paragraph with more than one character.",
+          );
+        if (!p.properties.dropCap)
+          this.apply({
+            type: "splitParagraph",
+            id: p.id!,
+            start: length,
+            end: length,
+          });
+        this.apply({
+          type: "paragraph",
+          id: p.id!,
+          format: {
+            dropCap: {
+              lines: finite(command.lines, 2, 10),
+              distancePt: finite(command.distancePt, 0, 72),
+              kind: command.kind,
+            },
+          },
+        });
+        this.apply({
+          type: "run",
+          id: p.id!,
+          start: 0,
+          end: length,
+          format: {
+            fontSizePt: (p.markProperties?.fontSizePt ?? 12) * command.lines,
+          },
+        });
+      }
+      return;
+    }
+    if (
+      command.type === "insertField" &&
+      ["title", "author"].includes(command.field)
+    )
+      this.value = freeze({
+        ...this.value,
+        properties: {
+          ...this.value.properties,
+          [command.field]: command.value,
+        },
+      });
+    if (command.type === "insertBreak") {
+      this.apply({
+        type: "splitParagraph",
+        id: command.id,
+        start: command.start,
+        end: command.end,
+      });
+      const target = this.currentSelection;
+      if (target)
+        this.apply({
+          type: "paragraph",
+          id: target.id,
+          format:
+            command.kind === "page"
+              ? { pageBreakBefore: true }
+              : { columnBreakBefore: true },
+        });
+      return;
+    }
+    if (command.type === "cover") {
+      const blocks = this.value.blocks.filter(
+        (b) =>
+          b.type !== "paragraph" ||
+          !b.bookmarks?.some((mark) =>
+            mark.name.startsWith("_DocxEditorCover_"),
+          ),
+      );
+      const covers: Paragraph[] = command.remove
+        ? []
+        : [command.title, command.subtitle, command.author, command.date].map(
+            (text, i) => {
+              validateText(text);
+              return {
+                type: "paragraph",
+                id: `p${this.nextId++}`,
+                properties: {},
+                directProperties: {
+                  alignment: command.design === "sideline" ? "left" : "center",
+                  spaceBeforePt: i === 0 ? 120 : 18,
+                },
+                bookmarks: [
+                  { name: `_DocxEditorCover_${i}`, start: 0, end: text.length },
+                ],
+                children: [
+                  {
+                    type: "text",
+                    text,
+                    properties: {},
+                    directProperties: {
+                      fontSizePt: i === 0 ? 32 : i === 1 ? 20 : 12,
+                      color:
+                        command.design === "simple" ? "#222222" : "#4479AA",
+                      bold: i === 0,
+                    },
+                  },
+                ],
+              };
+            },
+          );
+      if (covers.length)
+        covers.push({
+          type: "paragraph",
+          id: `p${this.nextId++}`,
+          properties: {},
+          bookmarks: [{ name: "_DocxEditorCover_break", start: 0, end: 0 }],
+          children: [{ type: "break", kind: "page", properties: {} }],
+        });
+      this.restore({
+        document: { ...this.value, blocks: [...covers, ...blocks] },
+        styles: this.store.snapshot(),
+        lists: this.lists.snapshot(),
+      });
+      return;
+    }
+    if (command.type === "arrange") {
+      for (const operation of arrangeObjects(this.value, command))
+        this.apply(operation);
+      return;
+    }
     if (command.type === "columns") {
       const count = finite(command.count, 1, 4);
       if (!Number.isInteger(count))
         throw new Error("Use a whole number of columns.");
-      this.value = freeze({
-        ...this.value,
-        page: {
-          ...this.value.page,
+      this.updatePage(
+        {
           columns: {
             count,
             gapPt: finite(command.gapPt ?? 36, 0, 144),
             separator: command.separator,
           },
         },
-      });
+        command.id,
+      );
       return;
     }
     const id = "id" in command ? command.id : undefined;
@@ -440,12 +656,102 @@ export class DocumentEngine implements DocumentSession {
       throw new Error(
         "This selection belongs to an older document revision. Select it again.",
       );
+    if (command.type === "layout") {
+      const format = structuredClone(command.format);
+      for (const key of ["widthPt", "heightPt"] as const)
+        if (format[key] !== undefined) finite(format[key], 72, 31680);
+      if (format.gutterPt !== undefined) finite(format.gutterPt, 0, 720);
+      if (format.pageNumberStart !== undefined)
+        finite(format.pageNumberStart, 1, 32767);
+      if (format.margins)
+        for (const value of Object.values(format.margins))
+          if (value !== undefined) finite(value, 0, 15840);
+      if (format.lineNumbers) {
+        finite(format.lineNumbers.start, 1, 32767);
+        finite(format.lineNumbers.countBy, 1, 100);
+        finite(format.lineNumbers.distancePt, 0, 144);
+      }
+      this.updatePage(format, command.id);
+      return;
+    }
+    if (command.type === "drawing") {
+      if (p!.children[command.index]?.type !== "drawing")
+        throw new Error("Select an object first.");
+      const children = p!.children.slice();
+      if (command.remove) children.splice(command.index, 1);
+      else if (command.drawing)
+        children[command.index] = validateDrawing(command.drawing);
+      this.setParagraph({ ...p!, children });
+      return;
+    }
+    if (command.type === "bookmark" || command.type === "comment") {
+      validateRange(paragraphText(p!), command.start, command.end);
+      if (command.type === "bookmark") {
+        if (!/^[\p{L}_][\p{L}\p{N}_]{0,39}$/u.test(command.name))
+          throw new Error(
+            "Use a bookmark name up to 40 letters, digits or underscores, starting with a letter.",
+          );
+        if (
+          !command.remove &&
+          allParagraphs(this.value).some(
+            (other) =>
+              other.id !== p!.id &&
+              other.bookmarks?.some((b) => b.name === command.name),
+          )
+        )
+          throw new Error("That bookmark name is already in use.");
+        this.setParagraph({
+          ...p!,
+          bookmarks: [
+            ...(p!.bookmarks ?? []).filter((b) => b.name !== command.name),
+            ...(command.remove
+              ? []
+              : [
+                  {
+                    name: command.name,
+                    start: command.start,
+                    end: command.end,
+                  },
+                ]),
+          ],
+        });
+      } else {
+        validateText(command.text);
+        this.setParagraph({
+          ...p!,
+          comments: [
+            ...(p!.comments ?? []).filter((c) => c.key !== command.key),
+            ...(command.remove
+              ? []
+              : [
+                  {
+                    key: command.key,
+                    start: command.start,
+                    end: command.end,
+                    text: command.text,
+                    author: command.author,
+                    date: command.date,
+                  },
+                ]),
+          ],
+        });
+      }
+      return;
+    }
     if (command.type === "story") {
       const kind = command.kind === "header" ? "headers" : "footers",
         variant = command.variant ?? "default";
-      const stories = { ...this.value[kind] };
-      if (command.remove) delete stories[variant];
-      else if (command.pageNumber || command.appendText || !stories[variant]) {
+      const target = sectionTarget(this.value, command.id);
+      const stories = { ...(target?.section?.[kind] ?? this.value[kind]) };
+      if (command.remove) {
+        if (this.value.blocks.some((b) => b.type === "paragraph" && b.section))
+          stories[variant] = [];
+        else delete stories[variant];
+      } else if (
+        command.pageNumber ||
+        command.appendText ||
+        !stories[variant]
+      ) {
         const paragraph: Paragraph = {
           type: "paragraph",
           id: `p${this.nextId++}`,
@@ -467,8 +773,13 @@ export class DocumentEngine implements DocumentSession {
             : [paragraph];
         this.currentSelection = { id: paragraph.id!, start: 0, end: 0 };
       }
+      if (target)
+        this.setParagraph({
+          ...target,
+          section: { ...target.section, [kind]: stories },
+        });
       this.restore({
-        document: { ...this.value, [kind]: stories },
+        document: target ? this.value : { ...this.value, [kind]: stories },
         styles: this.store.snapshot(),
         lists: this.lists.snapshot(),
       });
@@ -514,17 +825,22 @@ export class DocumentEngine implements DocumentSession {
     }
     if (command.type === "page") {
       const page = {
-        ...this.value.page,
+        ...pageForParagraph(this.value, command.id),
         widthPt: finite(command.widthPt, 72, 31680),
         heightPt: finite(command.heightPt, 72, 31680),
         ...(command.margins
-          ? { margins: { ...this.value.page?.margins, ...command.margins } }
+          ? {
+              margins: {
+                ...pageForParagraph(this.value, command.id).margins,
+                ...command.margins,
+              },
+            }
           : {}),
       };
       if (command.margins)
         for (const margin of Object.values(command.margins))
           finite(margin, 0, 15840);
-      this.value = freeze({ ...this.value, page });
+      this.updatePage(page, command.id);
       return;
     }
     if (

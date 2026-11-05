@@ -34,8 +34,24 @@ import { selectionStyleDelta } from "../core/style-selection.js";
 import { DocumentEngine, type EngineSnapshot } from "../core/document.js";
 import type { StyleCatalog } from "../core/styles.js";
 import type { ListDefinition } from "../core/lists.js";
-import { imageData, hyperlink } from "../core/assets.js";
+import { imageData, hyperlink, binaryData } from "../core/assets.js";
 import { addRelation, imageContentType, imageRun } from "./insert.js";
+import { drawingRun, updateDrawing, reframeDrawing } from "./drawing-writer.js";
+import { validateDrawing } from "../core/objects.js";
+import { arrangeObjects } from "../core/arrange.js";
+import { chartXml, chartWorkbook, workbookRows } from "./chart.js";
+import { writeProperty } from "./metadata.js";
+import { sectionFor } from "./section.js";
+import { sectionTarget } from "../core/sections.js";
+import { embeddedFile } from "./ole-package.js";
+import {
+  readAnchors,
+  insertAnchor,
+  annotationNode,
+  mapAnchor,
+  removeAnnotation,
+  clearAnchors,
+} from "./annotations.js";
 
 export type {
   EditCommand,
@@ -242,10 +258,10 @@ function textOf(run: Element): string {
 }
 function textRuns(p: Element): Element[] {
   return childElements(p).flatMap((e) =>
-    isWord(e, "r")
+    isWord(e, "r") && !annotationNode(e)
       ? [e]
       : isWord(e, "hyperlink")
-        ? childElements(e).filter((r) => isWord(r, "r"))
+        ? childElements(e).filter((r) => isWord(r, "r") && !annotationNode(r))
         : [],
   );
 }
@@ -258,13 +274,16 @@ function plain(p: Element): boolean {
         isWord(c, "t") ||
         isWord(c, "tab") ||
         isWord(c, "cr") ||
+        isWord(c, "commentReference") ||
         (isWord(c, "br") && !wordAttribute(c, "type")),
     );
   return childElements(p).every(
     (e) =>
       isWord(e, "pPr") ||
+      annotationNode(e) ||
       run(e) ||
-      (isWord(e, "hyperlink") && childElements(e).every(run)),
+      (isWord(e, "hyperlink") &&
+        childElements(e).every((e) => run(e) || annotationNode(e))),
   );
 }
 function textContent(p: Element) {
@@ -427,6 +446,33 @@ function setRun(run: Element, format: RunFormat, inheritedColor?: string) {
 }
 function setParagraph(p: Element, format: ParagraphFormat) {
   const pr = properties(p, "pPr");
+  if (format.dropCap) {
+    const frame = ensure(pr, "framePr", pOrder);
+    attr(frame, "dropCap", format.dropCap.kind);
+    attr(frame, "lines", Math.round(finite(format.dropCap.lines, 2, 10)));
+    attr(
+      frame,
+      "hSpace",
+      Math.round(finite(format.dropCap.distancePt, 0, 72) * 20),
+    );
+    attr(frame, "wrap", "around");
+    attr(frame, "hAnchor", "text");
+    attr(frame, "vAnchor", "text");
+  }
+  if (format.columnBreakBefore !== undefined) {
+    for (const node of childElements(p).filter(
+      (e) =>
+        isWord(e, "r") &&
+        childWord(e, "br") &&
+        wordAttribute(childWord(e, "br")!, "type") === "column",
+    ))
+      p.removeChild(node);
+    if (format.columnBreakBefore) {
+      const run = ensureDetached(p, "r");
+      attr(ensureNew(run, "br"), "type", "column");
+      p.insertBefore(run, pr.nextSibling);
+    }
+  }
   if (format.styleId !== undefined) {
     if (!format.styleId || format.styleId.length > 250)
       throw new Error("Invalid style.");
@@ -539,6 +585,7 @@ function setParagraph(p: Element, format: ParagraphFormat) {
     ["pageBreakBefore", "pageBreakBefore"],
     ["keepNext", "keepNext"],
     ["keepLines", "keepLines"],
+    ["suppressLineNumbers", "suppressLineNumbers"],
   ] as const)
     if (format[key] !== undefined)
       prop(pr, tag, format[key] ? "1" : "0", pOrder);
@@ -580,6 +627,13 @@ function rewriteText(
   inherit?: RunFormat,
 ) {
   const text = textContent(p);
+  const anchors = readAnchors(p);
+  const removeAnchors = (parent: Element) => {
+    for (const node of childElements(parent))
+      if (annotationNode(node)) parent.removeChild(node);
+      else if (isWord(node, "hyperlink")) removeAnchors(node);
+  };
+  removeAnchors(p);
   const start = command.start ?? 0,
     end = command.end ?? text.length;
   range(text, start, end);
@@ -699,6 +753,20 @@ function rewriteText(
     } else p.appendChild(run);
     previous = link;
   }
+  for (const a of anchors)
+    insertAnchor(
+      p,
+      a.node,
+      command.type === "text"
+        ? mapAnchor(
+            a.position,
+            start,
+            end,
+            command.text.length,
+            /End$/.test(a.node.localName ?? "") || isWord(a.node, "r"),
+          )
+        : a.position,
+    );
 }
 function clearRun(run: Element, inherit?: RunFormat) {
   const pr = childWord(run, "rPr");
@@ -809,10 +877,7 @@ export async function openDocxSession(
     }
   let sourceParts = new Map<string, string>();
   let binaryParts = new Map<string, Uint8Array>();
-  // Supported edits preserve the number of sections; avoid parsing XML from UI capability getters.
-  const canSetPage =
-    !lockedReason &&
-    descendants(parseXml(originalMain).documentElement!, "sectPr").length <= 1;
+  const canSetPage = !lockedReason;
   let sourceIdentities = new Map<string, string>();
   let nextIdentity = 1;
   let selection: { id: string; start: number; end: number } | undefined;
@@ -917,7 +982,9 @@ export async function openDocxSession(
         format: false,
         reason: "Tracked formatting is preserved as read-only.",
       };
-    const editable = plain(source.element);
+    const editable =
+      plain(source.element) &&
+      source.paragraph.children.every((r) => r.type === "text" && !r.field);
     return {
       text: editable,
       format: editable,
@@ -931,10 +998,169 @@ export async function openDocxSession(
   let pending = false;
   async function change(command: EditCommand) {
     if (lockedReason) throw new Error(lockedReason);
+    if (command.type === "sectionBreak") {
+      const source = sources.get(command.id);
+      if (
+        !source ||
+        source.part !== main ||
+        !isWord(source.element.parentNode as Element, "body")
+      )
+        throw new Error(
+          "Section breaks require a body paragraph outside a table.",
+        );
+      await change({
+        type: "splitParagraph",
+        id: command.id,
+        start: command.start,
+        end: command.end,
+      });
+      const target = selection;
+      const xml = parseXml(await overlay(sourceParts).readText(main)),
+        root = xml.documentElement!,
+        first = at(root, sources.get(command.id)!.path),
+        ending = sectionFor(root, first);
+      if (!childWord(ending, "cols")) {
+        const cols = ensure(ending, "cols");
+        attr(cols, "num", 1);
+        attr(cols, "space", 720);
+      }
+      const copy = ending.cloneNode(true) as Element;
+      const pr = properties(first, "pPr"),
+        old = childWord(pr, "sectPr");
+      if (old) pr.removeChild(old);
+      pr.appendChild(copy);
+      prop(ending, "type", command.kind, [
+        "headerReference",
+        "footerReference",
+        "footnotePr",
+        "endnotePr",
+        "type",
+        "pgSz",
+        "pgMar",
+        "cols",
+      ]);
+      const next = new Map(sourceParts).set(
+        main,
+        serializer.serializeToString(xml),
+      );
+      await load(next, sourceIdentities);
+      sourceParts = next;
+      selection = target;
+      return document;
+    }
+    if (command.type === "dropCap") {
+      const source = sources.get(command.id);
+      if (!source || !isWord(source.element.parentNode as Element, "body"))
+        throw new Error("Select a body paragraph outside a table.");
+      const text = source.paragraph.children
+          .filter((r) => r.type === "text")
+          .map((r) => r.text)
+          .join(""),
+        length =
+          Array.from(
+            new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+              text,
+            ),
+          )[0]?.segment.length ?? 0;
+      if (command.remove) {
+        if (!source.paragraph.properties.dropCap) return document;
+        const xml = parseXml(await overlay(sourceParts).readText(source.part)),
+          p = at(xml.documentElement!, source.path),
+          pr = childWord(p, "pPr"),
+          frame = pr && childWord(pr, "framePr");
+        if (frame) pr!.removeChild(frame);
+        const next = new Map(sourceParts).set(
+          source.part,
+          serializer.serializeToString(xml),
+        );
+        await load(next, sourceIdentities);
+        sourceParts = next;
+        await change({
+          type: "run",
+          id: command.id,
+          start: 0,
+          end: length,
+          format: {
+            fontSizePt: source.paragraph.markProperties?.fontSizePt ?? 12,
+          },
+        });
+        await change({
+          type: "joinParagraph",
+          id: command.id,
+          direction: "forward",
+        });
+      } else {
+        if (!source.paragraph.properties.dropCap && text.length <= length)
+          throw new Error(
+            "A drop cap needs a paragraph with more than one character.",
+          );
+        if (!source.paragraph.properties.dropCap)
+          await change({
+            type: "splitParagraph",
+            id: command.id,
+            start: length,
+            end: length,
+          });
+        await change({
+          type: "paragraph",
+          id: command.id,
+          format: {
+            dropCap: {
+              kind: command.kind,
+              lines: command.lines,
+              distancePt: command.distancePt,
+            },
+          },
+        });
+        await change({
+          type: "run",
+          id: command.id,
+          start: 0,
+          end: length,
+          format: {
+            fontSizePt:
+              (source.paragraph.markProperties?.fontSizePt ?? 12) *
+              command.lines,
+          },
+        });
+      }
+      return document;
+    }
+    if (command.type === "insertBreak") {
+      await change({
+        type: "splitParagraph",
+        id: command.id,
+        start: command.start,
+        end: command.end,
+      });
+      if (selection)
+        await change({
+          type: "paragraph",
+          id: selection.id,
+          format:
+            command.kind === "page"
+              ? { pageBreakBefore: true }
+              : { columnBreakBefore: true },
+        });
+      return document;
+    }
+    if (command.type === "arrange") {
+      for (const operation of arrangeObjects(document, command))
+        await change(operation);
+      return document;
+    }
     const current = sourceParts,
       updated = new Map(current);
-    const source =
-      "id" in command && command.id
+    const scopedId =
+      ["page", "layout", "columns", "story"].includes(command.type) &&
+      "id" in command &&
+      command.id
+        ? (sectionTarget(document, command.id)?.id ??
+          (sources.get(command.id)?.part === main ? command.id : undefined))
+        : undefined;
+    const source = scopedId
+      ? sources.get(scopedId)
+      : "id" in command && command.id
         ? sources.get(command.id)
         : command.type === "sort"
           ? sources.get(command.ids[0])
@@ -946,14 +1172,17 @@ export async function openDocxSession(
       throw new Error(
         "This selection belongs to an older document revision. Select it again.",
       );
-    const part = source?.part ?? main;
+    const part = ["page", "layout", "columns", "story"].includes(command.type)
+      ? main
+      : (source?.part ?? main);
     const xml = parseXml(await overlay(current).readText(part)),
       root = xml.documentElement!;
     const known = new Map<Element, string>();
     for (const [id, s] of sources)
       if (s.part === part) known.set(at(root, s.path), id);
     let nextSelection = selection;
-    const p = source && at(root, source.path);
+    const p =
+      source && source.part === part ? at(root, source.path) : undefined;
     if (
       command.type === "run" ||
       command.type === "text" ||
@@ -991,6 +1220,15 @@ export async function openDocxSession(
         );
       } else {
         const second = p!.cloneNode(true) as Element;
+        const anchors = readAnchors(p!);
+        clearAnchors(p!);
+        clearAnchors(second);
+        const secondPr = childWord(second, "pPr"),
+          pageBefore = secondPr && childWord(secondPr, "pageBreakBefore");
+        if (pageBefore) secondPr!.removeChild(pageBefore);
+        const secondFrame = secondPr && childWord(secondPr, "framePr");
+        if (secondFrame && wordAttribute(secondFrame, "dropCap"))
+          secondPr!.removeChild(secondFrame);
         let offset = 0;
         const runs = childElements(second).filter((e) => isWord(e, "r"));
         const caret =
@@ -1029,6 +1267,26 @@ export async function openDocxSession(
             if (old) pr.removeChild(old);
             pr.appendChild(mark.cloneNode(true));
           }
+        }
+        for (const anchor of anchors) {
+          const trailing =
+            /End$/.test(anchor.node.localName ?? "") ||
+            isWord(anchor.node, "r");
+          if (
+            anchor.position < command.start ||
+            (anchor.position === command.start && trailing)
+          )
+            insertAnchor(
+              p!,
+              anchor.node,
+              Math.min(anchor.position, command.start),
+            );
+          else
+            insertAnchor(
+              second,
+              anchor.node,
+              Math.max(0, anchor.position - command.end),
+            );
         }
         // A section boundary belongs to the last of the two resulting paragraphs.
         const firstPr = childWord(p!, "pPr"),
@@ -1188,16 +1446,474 @@ export async function openDocxSession(
           overlay(updated),
           main,
         );
+    } else if (command.type === "insertField") {
+      validText(command.value);
+      const parent = p?.parentNode ?? childWord(root, "body");
+      if (!parent) throw new Error("Select an insertion point.");
+      const para = ensureDetached(root, "p"),
+        field = ensureNew(para, "fldSimple");
+      attr(
+        field,
+        "instr",
+        {
+          page: "PAGE",
+          pages: "NUMPAGES",
+          date: 'DATE \\@ "MMMM d, yyyy"',
+          title: "DOCPROPERTY Title",
+          author: "DOCPROPERTY Author",
+        }[command.field],
+      );
+      field.appendChild(runWithText(ensureDetached(field, "r"), command.value));
+      const next = p
+        ? p.nextSibling
+        : childWord(childWord(root, "body")!, "sectPr");
+      parent.insertBefore(para, next ?? null);
+      const after = ensureDetached(root, "p");
+      parent.insertBefore(after, next ?? null);
+      const id = `p${nextIdentity++}`;
+      known.set(after, id);
+      nextSelection = { id, start: 0, end: 0 };
+      if (command.field === "title" || command.field === "author")
+        await writeProperty(
+          updated,
+          overlay(updated),
+          root.namespaceURI!,
+          command.field,
+          command.value,
+        );
+    } else if (command.type === "cover") {
+      const body = childWord(root, "body");
+      if (!body)
+        throw new Error("Cover pages must be inserted in the document body.");
+      for (const para of childElements(body).filter(
+        (e) =>
+          isWord(e, "p") &&
+          descendants(e, "bookmarkStart").some((mark) =>
+            (wordAttribute(mark, "name") ?? "").startsWith("_DocxEditorCover_"),
+          ),
+      ))
+        body.removeChild(para);
+      if (!command.remove) {
+        const first = body.firstChild;
+        let bookmarkId =
+          Math.max(
+            0,
+            ...descendants(root, "bookmarkStart").map(
+              (e) => Number(wordAttribute(e, "id")) || 0,
+            ),
+          ) + 1;
+        for (const [i, text] of [
+          command.title,
+          command.subtitle,
+          command.author,
+          command.date,
+          "",
+        ].entries()) {
+          validText(text);
+          const para = ensureDetached(body, "p");
+          setParagraph(para, {
+            alignment: command.design === "sideline" ? "left" : "center",
+            spaceBeforePt: i === 0 ? 120 : 18,
+            ...(command.design === "banded" && i === 0
+              ? { shading: "#E5EDF5" }
+              : {}),
+          });
+          const start = ensureNew(para, "bookmarkStart");
+          attr(start, "id", bookmarkId);
+          attr(start, "name", `_DocxEditorCover_${i === 4 ? "break" : i}`);
+          const run = runWithText(ensureDetached(para, "r"), text);
+          setRun(run, {
+            fontSizePt: i === 0 ? 32 : i === 1 ? 20 : 12,
+            color: command.design === "simple" ? "#222222" : "#4479AA",
+            bold: i === 0,
+          });
+          if (i === 4) {
+            for (const child of childElements(run))
+              if (!isWord(child, "rPr")) run.removeChild(child);
+            attr(ensureNew(run, "br"), "type", "page");
+          }
+          para.appendChild(run);
+          attr(ensureNew(para, "bookmarkEnd"), "id", bookmarkId++);
+          body.insertBefore(para, first);
+        }
+      }
+    } else if (command.type === "bookmark" || command.type === "comment") {
+      validateParagraph(command.id);
+      range(textContent(p!), command.start, command.end);
+      const make = (name: string, id: string) => {
+        const node = xml.createElementNS(root.namespaceURI, `w:${name}`);
+        attr(node, "id", id);
+        return node;
+      };
+      if (command.type === "bookmark") {
+        if (!/^[\p{L}_][\p{L}\p{N}_]{0,39}$/u.test(command.name))
+          throw new Error(
+            "Use a bookmark name up to 40 letters, digits or underscores.",
+          );
+        const old = descendants(root, "bookmarkStart").find(
+          (e) => wordAttribute(e, "name") === command.name,
+        );
+        if (old) removeAnnotation(p!, "bookmark", wordAttribute(old, "id")!);
+        if (!command.remove) {
+          const id = String(
+            Math.max(
+              0,
+              ...descendants(root, "bookmarkStart").map(
+                (e) => Number(wordAttribute(e, "id")) || 0,
+              ),
+            ) + 1,
+          );
+          const start = make("bookmarkStart", id);
+          attr(start, "name", command.name);
+          insertAnchor(p!, start, command.start);
+          insertAnchor(p!, make("bookmarkEnd", id), command.end);
+        }
+      } else {
+        const comments = await related(
+          "comments",
+          updated,
+          overlay(updated),
+          main,
+        );
+        const old = childElements(comments.root).find(
+          (e) => isWord(e, "comment") && wordAttribute(e, "id") === command.key,
+        );
+        if (old) comments.root.removeChild(old);
+        removeAnnotation(p!, "comment", command.key);
+        if (!command.remove) {
+          validText(command.text);
+          const id = /^\d+$/.test(command.key)
+            ? command.key
+            : String(
+                Math.max(
+                  -1,
+                  ...childElements(comments.root).map(
+                    (e) => Number(wordAttribute(e, "id")) || 0,
+                  ),
+                ) + 1,
+              );
+          const item = make("comment", id);
+          attr(item, "author", command.author.slice(0, 200));
+          attr(item, "date", new Date(command.date).toISOString());
+          const para = ensure(item, "p"),
+            run = ensure(para, "r");
+          para.replaceChild(runWithText(run, command.text), run);
+          comments.root.appendChild(item);
+          insertAnchor(p!, make("commentRangeStart", id), command.start);
+          const end = make("commentRangeEnd", id);
+          insertAnchor(p!, end, command.end);
+          const reference = xml.createElementNS(root.namespaceURI, "w:r");
+          reference.appendChild(make("commentReference", id));
+          end.parentNode!.insertBefore(reference, end.nextSibling);
+        }
+        updated.set(
+          comments.path,
+          serializer.serializeToString(comments.root.ownerDocument!),
+        );
+      }
+    } else if (command.type === "insertDrawing" || command.type === "drawing") {
+      if (source) validateParagraph(source.paragraph.id!);
+      const imageRelation = async (dataUrl: string) => {
+        const data = imageData(dataUrl),
+          folder = part.split("/").slice(0, -1).join("/");
+        let n = 1;
+        while (
+          overlay(updated).hasPart(
+            `${folder}/media/editor-object-${n}.${data.extension}`,
+          )
+        )
+          n++;
+        const path = `${folder}/media/editor-object-${n}.${data.extension}`;
+        const relation = await addRelation(
+          updated,
+          overlay(updated),
+          part,
+          `media/editor-object-${n}.${data.extension}`,
+          "image",
+          root.namespaceURI!,
+        );
+        binaryParts = new Map(binaryParts).set(path, data.bytes);
+        await imageContentType(updated, overlay(updated), path, data.mime);
+        return relation;
+      };
+      const chartRelation = async (
+        chart: NonNullable<
+          import("../model/document.js").DrawingInline["chart"]
+        >,
+      ) => {
+        const folder = part.split("/").slice(0, -1).join("/");
+        let n = 1;
+        while (
+          overlay(updated).hasPart(`${folder}/charts/editor-chart-${n}.xml`)
+        )
+          n++;
+        const chartPart = `${folder}/charts/editor-chart-${n}.xml`,
+          book = `${folder}/embeddings/editor-chart-${n}.xlsx`;
+        const relation = await addRelation(
+          updated,
+          overlay(updated),
+          part,
+          `charts/editor-chart-${n}.xml`,
+          "chart",
+          root.namespaceURI!,
+        );
+        binaryParts = new Map(binaryParts).set(book, chartWorkbook(chart));
+        await imageContentType(
+          updated,
+          overlay(updated),
+          book,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        const external = await addRelation(
+          updated,
+          overlay(updated),
+          chartPart,
+          `../embeddings/editor-chart-${n}.xlsx`,
+          "package",
+          root.namespaceURI!,
+        );
+        updated.set(chartPart, chartXml(chart, external));
+        await imageContentType(
+          updated,
+          overlay(updated),
+          chartPart,
+          "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
+        );
+        return relation;
+      };
+      const assetRelation = async (
+        asset: {
+          dataUrl: string;
+          name?: string;
+          mime?: string;
+          progId?: string;
+          cells?: string[][];
+        },
+        kind: "model3d" | "attachment",
+      ) => {
+        const data =
+            kind === "attachment"
+              ? embeddedFile(
+                  asset,
+                  asset.cells ? workbookRows(asset.cells) : undefined,
+                )
+              : {
+                  ...binaryData(asset.dataUrl),
+                  extension: "glb",
+                  kind: "model3d" as const,
+                  progId: undefined,
+                },
+          folder = part.split("/").slice(0, -1).join("/"),
+          extension = data.extension;
+        let n = 1;
+        while (
+          overlay(updated).hasPart(
+            `${folder}/embeddings/editor-object-${n}.${extension}`,
+          )
+        )
+          n++;
+        const target = `embeddings/editor-object-${n}.${extension}`,
+          path = `${folder}/${target}`;
+        binaryParts = new Map(binaryParts).set(path, data.bytes);
+        await imageContentType(
+          updated,
+          overlay(updated),
+          path,
+          kind === "model3d" ? "model/gltf-binary" : data.mime,
+        );
+        return {
+          id: await addRelation(
+            updated,
+            overlay(updated),
+            part,
+            target,
+            data.kind,
+            root.namespaceURI!,
+          ),
+          progId: data.progId,
+        };
+      };
+      const linkRelation = (url: string) =>
+        addRelation(
+          updated,
+          overlay(updated),
+          part,
+          url,
+          "hyperlink",
+          root.namespaceURI!,
+          true,
+        );
+      if (command.type === "insertDrawing") {
+        const d = validateDrawing(command.drawing),
+          parent = p?.parentNode ?? childWord(root, "body");
+        if (!parent) throw new Error("Select an insertion point.");
+        const para = root.ownerDocument!.createElementNS(
+            root.namespaceURI,
+            "w:p",
+          ),
+          next = p
+            ? p.nextSibling
+            : childWord(root, "body") &&
+              childWord(childWord(root, "body")!, "sectPr");
+        const drawingId = nextDrawingId(root);
+        para.appendChild(
+          await drawingRun(
+            para,
+            d,
+            drawingId,
+            imageRelation,
+            chartRelation,
+            assetRelation,
+            linkRelation,
+          ),
+        );
+        parent.insertBefore(para, next ?? null);
+        const after = root.ownerDocument!.createElementNS(
+          root.namespaceURI,
+          "w:p",
+        );
+        parent.insertBefore(after, next ?? null);
+        const id = `p${nextIdentity++}`;
+        known.set(after, id);
+        nextSelection = { id, start: 0, end: 0 };
+      } else {
+        const objects = childElements(p!).flatMap((r) =>
+          r.localName === "oMath"
+            ? [r]
+            : isWord(r, "r")
+              ? childElements(r).filter(
+                  (e) => isWord(e, "drawing") || isWord(e, "object"),
+                )
+              : [],
+        );
+        const inline = source!.paragraph.children[command.index];
+        if (inline?.type !== "drawing")
+          throw new Error("Select an object first.");
+        const objectIndex = source!.paragraph.children
+          .slice(0, command.index)
+          .filter((r) => r.type === "drawing").length;
+        const target = objects[objectIndex];
+        if (!target) throw new Error("This object cannot be edited safely.");
+        if (command.remove) target.parentNode!.removeChild(target);
+        else if (command.drawing) {
+          const d = validateDrawing(command.drawing);
+          if (
+            d.children !== undefined ||
+            inline.children !== undefined ||
+            d.equation ||
+            d.attachment ||
+            d.spreadsheet ||
+            JSON.stringify(d.chart) !== JSON.stringify(inline.chart)
+          ) {
+            const replacement = await drawingRun(
+              p!,
+              d,
+              Number(descendants(target, "docPr")[0]?.getAttribute("id")) ||
+                nextDrawingId(root),
+              imageRelation,
+              chartRelation,
+              assetRelation,
+              linkRelation,
+            );
+            if (target.localName === "oMath")
+              target.parentNode!.replaceChild(replacement, target);
+            else
+              target.parentNode!.parentNode!.replaceChild(
+                replacement,
+                target.parentNode!,
+              );
+          } else {
+            updateDrawing(target, d);
+            await reframeDrawing(target, d);
+          }
+        }
+      }
+    } else if (command.type === "layout") {
+      if (!canSetPage)
+        throw new Error("This document is protected from layout changes.");
+      const f = command.format,
+        body = childWord(root, "body")!,
+        section = sectionFor(root, p);
+      if (f.margins)
+        for (const [key, value] of Object.entries(f.margins))
+          if (value !== undefined)
+            attr(
+              ensure(section, "pgMar"),
+              key,
+              Math.round(finite(value, 0, 15840) * 20),
+            );
+      if (f.widthPt || f.heightPt) {
+        const size = ensure(section, "pgSz");
+        if (f.widthPt)
+          attr(size, "w", Math.round(finite(f.widthPt, 72, 31680) * 20));
+        if (f.heightPt)
+          attr(size, "h", Math.round(finite(f.heightPt, 72, 31680) * 20));
+      }
+      if (f.gutterPt !== undefined)
+        attr(
+          ensure(section, "pgMar"),
+          "gutter",
+          Math.round(finite(f.gutterPt, 0, 720) * 20),
+        );
+      if (f.direction)
+        prop(section, "bidi", f.direction === "rtl" ? "1" : "0", []);
+      if (f.verticalAlignment) prop(section, "vAlign", f.verticalAlignment, []);
+      if (f.differentFirstPage !== undefined)
+        prop(section, "titlePg", f.differentFirstPage ? "1" : "0", []);
+      if (f.pageNumberStart !== undefined)
+        attr(
+          ensure(section, "pgNumType"),
+          "start",
+          Math.round(finite(f.pageNumberStart, 1, 32767)),
+        );
+      if (f.lineNumbers) {
+        const line = ensure(section, "lnNumType");
+        attr(line, "start", f.lineNumbers.start - 1);
+        attr(line, "countBy", f.lineNumbers.countBy);
+        attr(line, "distance", Math.round(f.lineNumbers.distancePt * 20));
+        attr(
+          line,
+          "restart",
+          f.lineNumbers.mode === "page"
+            ? "newPage"
+            : f.lineNumbers.mode === "section"
+              ? "newSection"
+              : "continuous",
+        );
+      } else if (Object.hasOwn(f, "lineNumbers")) {
+        const line = childWord(section, "lnNumType");
+        if (line) section.removeChild(line);
+      }
+      const rels = await readRelationships(overlay(updated), main),
+        settings = [...rels.values()].find(
+          (r) => r.type === "settings" && !r.external,
+        );
+      if (
+        settings &&
+        (f.hyphenation !== undefined ||
+          f.mirrorMargins !== undefined ||
+          f.evenAndOddHeaders !== undefined)
+      ) {
+        const settingsXml = parseXml(
+            await overlay(updated).readText(settings.target),
+          ),
+          s = settingsXml.documentElement!;
+        if (f.hyphenation !== undefined)
+          prop(s, "autoHyphenation", f.hyphenation === "auto" ? "1" : "0", []);
+        if (f.mirrorMargins !== undefined)
+          prop(s, "mirrorMargins", f.mirrorMargins ? "1" : "0", []);
+        if (f.evenAndOddHeaders !== undefined)
+          prop(s, "evenAndOddHeaders", f.evenAndOddHeaders ? "1" : "0", []);
+        updated.set(settings.target, serializer.serializeToString(settingsXml));
+      }
     } else if (command.type === "columns") {
       if (!canSetPage)
-        throw new Error(
-          "Column editing currently supports single-section documents.",
-        );
+        throw new Error("This document is protected from layout changes.");
       const count = finite(command.count, 1, 4);
       if (!Number.isInteger(count))
         throw new Error("Use a whole number of columns.");
       const body = childWord(root, "body")!,
-        cols = ensure(ensure(body, "sectPr"), "cols");
+        cols = ensure(sectionFor(root, p), "cols");
       for (const child of childElements(cols)) cols.removeChild(child);
       attr(cols, "num", count);
       attr(cols, "space", Math.round(finite(command.gapPt ?? 36, 0, 144) * 20));
@@ -1239,13 +1955,7 @@ export async function openDocxSession(
         root.namespaceURI,
         "w:p",
       );
-      const drawingId =
-        Math.max(
-          0,
-          ...descendants(root, "docPr").map(
-            (e) => Number(e.getAttribute("id")) || 0,
-          ),
-        ) + 1;
+      const drawingId = nextDrawingId(root);
       para.appendChild(
         imageRun(para, relation, width, height, command.alt, drawingId),
       );
@@ -1314,18 +2024,15 @@ export async function openDocxSession(
       }
     } else if (command.type === "story") {
       const body = childWord(root, "body");
-      if (!body || descendants(body, "sectPr").length > 1)
-        throw new Error(
-          "Header and footer creation currently supports single-section documents.",
-        );
-      const section = ensure(body, "sectPr"),
+      if (!body) throw new Error("No document body.");
+      const section = sectionFor(root, p),
         variant = command.variant ?? "default";
       const ref = childElements(section).find(
         (e) =>
           isWord(e, `${command.kind}Reference`) &&
           wordAttribute(e, "type") === variant,
       );
-      if (command.remove) {
+      if (command.remove && descendants(body, "sectPr").length === 1) {
         if (ref) section.removeChild(ref);
       } else {
         const rels = await readRelationships(overlay(updated), main);
@@ -1366,10 +2073,14 @@ export async function openDocxSession(
           reference.setAttributeNS(relNS, "r:id", (story as { id: string }).id);
         }
         if (
+          command.remove ||
           command.pageNumber ||
           command.appendText ||
           !childWord(story.root, "p")
         ) {
+          if (command.remove)
+            for (const node of childElements(story.root))
+              story.root.removeChild(node);
           const para = story.root.ownerDocument!.createElementNS(
             root.namespaceURI,
             "w:p",
@@ -1396,12 +2107,8 @@ export async function openDocxSession(
         );
       }
     } else if (command.type === "page") {
-      if (descendants(root, "sectPr").length > 1)
-        throw new Error(
-          "Page setup for multiple sections is not editable yet.",
-        );
       const body = childWord(root, "body")!;
-      const section = ensure(body, "sectPr"),
+      const section = sectionFor(root, p),
         size = ensure(section, "pgSz", [
           "headerReference",
           "footerReference",
@@ -1453,8 +2160,16 @@ export async function openDocxSession(
       }
     } else {
       // Insert only at body boundaries; do not rewrite table cells or textbox containers.
-      const body = childWord(root, "body");
-      if (!body || (p && p.parentNode !== body))
+      const body =
+        p?.parentNode?.nodeType === 1
+          ? (p.parentNode as Element)
+          : childWord(root, "body");
+      if (
+        !body ||
+        !["body", "tc", "hdr", "ftr", "txbxContent"].some((name) =>
+          isWord(body, name),
+        )
+      )
         throw new Error(
           "Select a body paragraph outside a table to insert here.",
         );
@@ -1502,12 +2217,33 @@ export async function openDocxSession(
         }
         const grid = ensure(table, "tblGrid");
         for (let i = 0; i < columns; i++)
-          attr(ensureNew(grid, "gridCol"), "w", Math.round(9360 / columns));
+          attr(
+            ensureNew(grid, "gridCol"),
+            "w",
+            Math.round(
+              command.columnWidthsPt?.[i] !== undefined
+                ? finite(command.columnWidthsPt[i], 6, 1440) * 20
+                : 9360 / columns,
+            ),
+          );
         for (let r = 0; r < rows; r++) {
           const row = ensureNew(table, "tr");
+          if (command.header && r === 0)
+            prop(ensure(row, "trPr"), "tblHeader", "1", []);
           for (let c = 0; c < columns; c++) {
             const cell = ensureNew(row, "tc");
-            ensureNew(cell, "p");
+            const para = ensureNew(cell, "p");
+            const value = command.cells?.[r]?.[c] ?? "";
+            validText(value);
+            if (value)
+              para.appendChild(runWithText(ensureDetached(para, "r"), value));
+            if (command.header && r === 0) {
+              const pr = ensure(cell, "tcPr");
+              cell.insertBefore(pr, cell.firstChild);
+              const shd = ensure(pr, "shd");
+              attr(shd, "val", "clear");
+              attr(shd, "fill", "E5EDF5");
+            }
           }
         }
         body.insertBefore(table, next);
@@ -1756,6 +2492,18 @@ function ensureDetached(parent: Element, name: string) {
     parent.namespaceURI,
     `${parent.prefix || "w"}:${name}`,
   );
+}
+function nextDrawingId(root: Element) {
+  const elements = descendants(root, "docPr"),
+    ids = new Set(
+      [...descendants(root, "shape"), ...descendants(root, "shapetype")].map(
+        (e) => e.getAttribute("id"),
+      ),
+    );
+  let id =
+    Math.max(0, ...elements.map((e) => Number(e.getAttribute("id")) || 0)) + 1;
+  while (ids.has(`_x0000_i${1000 + id}`) || ids.has(`_editor_t75_${id}`)) id++;
+  return id;
 }
 function ensureNew(parent: Element, name: string) {
   const node = ensureDetached(parent, name);

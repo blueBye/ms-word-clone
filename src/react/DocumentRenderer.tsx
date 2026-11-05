@@ -1,5 +1,8 @@
 import React from "react";
 import { textEffectsStyle } from "./text-effects.js";
+import { ChartView, EquationView } from "./StructuredObjects.js";
+import { ModelView } from "./ModelView.js";
+import { VideoView } from "./VideoView.js";
 import type { CSSProperties, ReactNode } from "react";
 import { getParagraphs, getTextRuns } from "../model/traversal.js";
 import { localizeDigits } from "../model/numerals.js";
@@ -25,6 +28,22 @@ const EAST_ASIAN =
   /\p{Script_Extensions=Han}|\p{Script_Extensions=Hiragana}|\p{Script_Extensions=Katakana}|\p{Script_Extensions=Hangul}/u;
 const NEUTRAL = /^[\p{P}\p{Z}\p{M}\p{Cf}]+$/u;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const shapePaths: Record<string, string> = {
+  triangle: "M50 0 100 100H0Z",
+  rtTriangle: "M0 0 100 100H0Z",
+  diamond: "M50 0 100 50 50 100 0 50Z",
+  hexagon: "M25 0H75L100 50 75 100H25L0 50Z",
+  pentagon: "M50 0 100 38 80 100H20L0 38Z",
+  chevron: "M0 0H60L100 50 60 100H0L40 50Z",
+  rightArrow: "M0 30H60V0L100 50 60 100V70H0Z",
+  leftArrow: "M100 30H40V0L0 50 40 100V70H100Z",
+  upArrow: "M30 100V40H0L50 0 100 40H70V100Z",
+  downArrow: "M30 0V60H0L50 100 100 60H70V0Z",
+  star5: "M50 0 61 35 98 35 68 57 79 94 50 72 21 94 32 57 2 35 39 35Z",
+  plus: "M35 0H65V35H100V65H65V100H35V65H0V35H35Z",
+  heart: "M50 95 7 52C-15 22 15-15 50 20 85-15 115 22 93 52Z",
+  line: "M0 100 100 0",
+};
 type Script = "ascii" | "hAnsi" | "eastAsia" | "cs";
 
 function paragraphMarkScript(properties: RunProperties): Script {
@@ -158,6 +177,7 @@ function borderStyle(borders: Borders | undefined): CSSProperties {
   };
 }
 interface RenderContext {
+  paragraphId?: string;
   page?: PageLayout;
   pageNumber?: number;
   pageCount?: number;
@@ -237,6 +257,13 @@ export function getRequiredFonts(document: DocumentIR): FontRequirement[] {
     }
   }
   scan(document.blocks, "body");
+  for (const p of getParagraphs(document.blocks))
+    for (const [kind, location] of [
+      ["headers", "header"],
+      ["footers", "footer"],
+    ] as const)
+      for (const blocks of Object.values(p.section?.[kind] ?? {}))
+        scan(blocks ?? [], location);
   for (const blocks of Object.values(document.headers ?? {}))
     scan(blocks ?? [], "header");
   for (const blocks of Object.values(document.footers ?? {}))
@@ -247,11 +274,13 @@ export function getRequiredFonts(document: DocumentIR): FontRequirement[] {
 function Drawing({
   drawing: d,
   context,
+  index,
 }: {
   drawing: DrawingInline;
   context: RenderContext;
+  index?: number;
 }) {
-  const Container = d.blocks ? "div" : "span";
+  const Container = d.blocks || d.children ? "div" : "span";
   const anchor = d.position;
   const horizontal = anchor?.horizontal;
   const vertical = anchor?.vertical;
@@ -264,18 +293,25 @@ function Drawing({
     verticalAlign: "middle",
     position: anchor ? "absolute" : "relative",
     overflow: d.blocks ? "visible" : "hidden",
-    backgroundColor: d.shape?.fill,
-    border: d.shape?.stroke
-      ? `${d.shape.strokeWidthPt ?? 1}pt solid ${d.shape.stroke}`
-      : undefined,
+    backgroundColor: shapePaths[d.shape?.kind ?? ""]
+      ? undefined
+      : d.shape?.fill,
+    border:
+      d.shape?.stroke && !shapePaths[d.shape.kind]
+        ? `${d.shape.strokeWidthPt ?? 1}pt solid ${d.shape.stroke}`
+        : undefined,
     borderRadius:
       d.shape?.kind === "ellipse"
         ? "50%"
         : d.shape?.kind === "roundRect"
           ? "12%"
           : undefined,
-    transform: d.shape?.rotation ? `rotate(${d.shape.rotation}deg)` : undefined,
-    zIndex: anchor ? (anchor.behindText ? 0 : 2) : undefined,
+    transform: `rotate(${d.shape?.rotation ?? 0}deg) scale(${d.flipH ? -1 : 1},${d.flipV ? -1 : 1})`,
+    zIndex: anchor
+      ? anchor.behindText
+        ? 0
+        : Math.max(2, anchor.zIndex)
+      : undefined,
   };
   if (anchor) {
     const pageRelative = horizontal?.relativeTo === "page";
@@ -293,11 +329,91 @@ function Drawing({
   const height = Math.max(0.001, 1 - (crop?.top ?? 0) - (crop?.bottom ?? 0));
   return (
     <Container
+      data-drawing-owner={context.paragraphId}
+      data-drawing-index={index}
+      contentEditable={false}
       style={style}
       data-docx-drawing={anchor ? "anchor" : "inline"}
       data-docx-behind-text={anchor?.behindText ? "true" : undefined}
     >
-      {d.image && (
+      {d.chart && <ChartView chart={d.chart} />}
+      {d.equation && <EquationView expression={d.equation.expression} />}
+      {d.model3d && <ModelView model={d.model3d} />}
+      {d.video && <VideoView url={d.video.url} poster={d.image?.dataUrl} />}
+      {d.spreadsheet && (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            overflow: "hidden",
+            background: "white",
+          }}
+        >
+          <table
+            style={{
+              borderCollapse: "collapse",
+              fontSize: "10pt",
+              width: "100%",
+            }}
+          >
+            <tbody>
+              {d.spreadsheet.cells.map((row, r) => (
+                <tr key={r}>
+                  {row.map((value, c) => (
+                    <td
+                      key={c}
+                      style={{
+                        border: ".5pt solid #B8C2CF",
+                        padding: "4pt",
+                        background: r === 0 ? "#E5EDF5" : "white",
+                      }}
+                    >
+                      {value}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {d.attachment && !d.spreadsheet && (
+        <a
+          href={d.attachment.dataUrl}
+          download={d.attachment.name}
+          style={{
+            display: "grid",
+            placeContent: "center",
+            width: "100%",
+            height: "100%",
+            background: "#EEF2F6",
+            border: "1px solid #71879B",
+            fontSize: "12pt",
+          }}
+        >
+          ▣ {d.attachment.name}
+          <small>Download embedded file</small>
+        </a>
+      )}
+      {d.shape && shapePaths[d.shape.kind] && (
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          width="100%"
+          height="100%"
+          style={{ position: "absolute", inset: 0 }}
+          aria-hidden="true"
+        >
+          <path
+            d={shapePaths[d.shape.kind]}
+            fill={d.shape.fill ?? "none"}
+            stroke={d.shape.stroke ?? "none"}
+            strokeWidth={d.shape.strokeWidthPt ?? 1}
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      )}
+      {d.image && !d.video && !d.attachment && !d.spreadsheet && (
         <img
           src={d.image.dataUrl}
           alt={d.alt}
@@ -314,8 +430,13 @@ function Drawing({
           }}
         />
       )}
+      {d.children?.map((child, index) => (
+        <Drawing key={index} drawing={child} context={context} />
+      ))}
       {d.blocks && (
         <div
+          contentEditable
+          suppressContentEditableWarning
           style={{
             position: "relative",
             width: "100%",
@@ -326,15 +447,23 @@ function Drawing({
           {renderBlocks(d.blocks, context)}
         </div>
       )}
-      {!d.image && !d.shape && !d.blocks && (
-        <span
-          role="img"
-          aria-label={d.alt || "Unsupported image"}
-          style={{ fontSize: "9pt" }}
-        >
-          [Image]
-        </span>
-      )}
+      {!d.image &&
+        !d.shape &&
+        !d.blocks &&
+        !d.children &&
+        !d.chart &&
+        !d.equation &&
+        !d.model3d &&
+        !d.attachment &&
+        !d.video && (
+          <span
+            role="img"
+            aria-label={d.alt || "Unsupported image"}
+            style={{ fontSize: "9pt" }}
+          >
+            [Image]
+          </span>
+        )}
     </Container>
   );
 }
@@ -344,7 +473,9 @@ function renderInline(
   context: RenderContext,
 ): ReactNode {
   if (inline.type === "drawing")
-    return <Drawing key={index} drawing={inline} context={context} />;
+    return (
+      <Drawing key={index} index={index} drawing={inline} context={context} />
+    );
   if (inline.type === "break")
     return (
       <span
@@ -359,7 +490,8 @@ function renderInline(
       />
     );
   const text =
-    inline.field && context.pageNumber !== undefined
+    (inline.field === "page" || inline.field === "pages") &&
+    context.pageNumber !== undefined
       ? localizeDigits(
           String(
             inline.field === "pages"
@@ -434,13 +566,17 @@ function renderParagraph(
   next?: Block,
 ) {
   const Container = block.children.some(
-    (inline) => inline.type === "drawing" && inline.blocks,
+    (inline) => inline.type === "drawing" && (inline.blocks || inline.children),
   )
     ? "div"
     : "p";
   const p = block.properties;
   const direction = p.direction ?? "ltr";
-  const inlineContext = { ...context, paragraphDirection: direction };
+  const inlineContext = {
+    ...context,
+    paragraphDirection: direction,
+    paragraphId: block.id,
+  };
   const line = p.lineSpacing;
   const mark = block.markProperties;
   const markStyle = mark && runStyle(mark, paragraphMarkScript(mark));
@@ -448,6 +584,18 @@ function renderParagraph(
     other?.type === "paragraph" && other.properties.styleId === p.styleId;
   const style: CSSProperties = {
     // The paragraph font contributes to every line box, even with styled runs.
+    ...(p.dropCap
+      ? {
+          float: direction === "rtl" ? "right" : "left",
+          lineHeight: 1,
+          marginInlineEnd: `${p.dropCap.distancePt}pt`,
+          ...(p.dropCap.kind === "margin"
+            ? {
+                marginInlineStart: `-${block.children.find((r) => r.type === "text")?.properties.fontSizePt ?? 36}pt`,
+              }
+            : {}),
+        }
+      : {}),
     fontFamily: markStyle?.fontFamily,
     fontSize: markStyle?.fontSize,
     fontWeight: markStyle?.fontWeight,
@@ -492,6 +640,9 @@ function renderParagraph(
     breakBefore: p.pageBreakBefore ? "page" : undefined,
     tabSize: p.tabs?.[0]?.positionPt ? `${p.tabs[0].positionPt}pt` : 4,
     ...(!block.children.length && mark ? markStyle : {}),
+    ...(p.dropCap
+      ? { lineHeight: 1, marginInlineEnd: `${p.dropCap.distancePt}pt` }
+      : {}),
   };
   return (
     <Container
@@ -501,6 +652,7 @@ function renderParagraph(
       data-docx-style={p.styleId}
       data-docx-paragraph=""
       data-paragraph-id={block.id}
+      data-suppress-line-numbers={p.suppressLineNumbers || undefined}
     >
       {p.list && (
         <span
@@ -698,8 +850,15 @@ export function DocumentRenderer({
   columnBlocks,
   showFormattingMarks = false,
 }: DocumentRendererProps) {
-  const page = document.page,
-    margins = page?.margins;
+  const page = document.page;
+  const margins = { ...page?.margins };
+  if (page?.mirrorMargins && pageNumber % 2 === 0)
+    [margins.left, margins.right] = [margins.right ?? 72, margins.left ?? 72];
+  if (page?.gutterPt) {
+    const inside =
+      page.mirrorMargins && pageNumber % 2 === 0 ? "right" : "left";
+    margins[inside] = (margins[inside] ?? 72) + page.gutterPt;
+  }
   const context: RenderContext = {
     page: pageLayout ? page : undefined,
     pageNumber: (page?.pageNumberStart ?? 1) + pageNumber - 1,
@@ -739,6 +898,7 @@ export function DocumentRenderer({
         ...style,
       }}
       data-docx-engine="preview-2"
+      lang={document.language ?? "en"}
     >
       {pageLayout && header && (
         <div
@@ -763,12 +923,31 @@ export function DocumentRenderer({
                   gridTemplateColumns: `repeat(${page?.columns?.count ?? columnBlocks.length},minmax(0,1fr))`,
                   columnGap: `${page?.columns?.gapPt ?? 36}pt`,
                   direction:
-                    document.language?.startsWith("fa") ||
-                    document.language?.startsWith("ar")
+                    page?.direction === "rtl" ||
+                    (!page?.direction &&
+                      (document.language?.startsWith("fa") ||
+                        document.language?.startsWith("ar")))
                       ? "rtl"
                       : "ltr",
                 }
-              : { display: "flow-root" }
+              : {
+                  display:
+                    page?.verticalAlignment && page.verticalAlignment !== "top"
+                      ? "flex"
+                      : "flow-root",
+                  ...(page?.verticalAlignment &&
+                  page.verticalAlignment !== "top"
+                    ? {
+                        flexDirection: "column",
+                        minHeight: `${(page.heightPt ?? 841.9) - (contentTopPt ?? margins.top ?? 72) - (contentBottomPt ?? margins.bottom ?? 72)}pt`,
+                        justifyContent:
+                          page.verticalAlignment === "center"
+                            ? "center"
+                            : "flex-end",
+                      }
+                    : {}),
+                  hyphens: page?.hyphenation === "auto" ? "auto" : "none",
+                }
           }
         >
           {columnBlocks

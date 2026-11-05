@@ -12,6 +12,12 @@ export function paragraphs(document: DocumentIR | null): Paragraph[] {
   if (!document) return [];
   return [
     ...getParagraphs(document.blocks),
+    ...getParagraphs(document.blocks).flatMap((p) =>
+      [
+        ...Object.values(p.section?.headers ?? {}),
+        ...Object.values(p.section?.footers ?? {}),
+      ].flatMap((b) => getParagraphs(b ?? [])),
+    ),
     ...Object.values(document.headers ?? {}).flatMap((b) =>
       getParagraphs(b ?? []),
     ),

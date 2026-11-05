@@ -20,6 +20,11 @@ import {
   wordAttribute,
 } from "./parser/xml.js";
 import { parseBlocks, parseDocumentXml } from "./parser/document.js";
+import { readChart } from "./chart.js";
+import { spreadsheetRows } from "./spreadsheet.js";
+import { readProperties } from "./metadata.js";
+import { readSection } from "./section.js";
+import { unpackFile } from "./ole-package.js";
 import {
   readRelationships,
   relationshipAttribute,
@@ -94,11 +99,104 @@ export async function parseDocxPackage(
     ? "fa-IR"
     : styles.defaults.run.complexScriptLanguage;
   const assets = new Map<string, string>();
+  const attachmentNames = new Map<string, string>();
+  const charts: NonNullable<ParseContext["charts"]> = new Map();
+  const spreadsheets = new Map<string, string[][]>();
+  const comments = new Map<
+    string,
+    { text: string; author: string; date: string }
+  >();
+  const commentsPart = [...relationships.values()].find(
+    (r) => r.type === "comments" && !r.external,
+  );
+  if (commentsPart && pkg.hasPart(commentsPart.target))
+    for (const c of childElements(
+      parseXml(await pkg.readText(commentsPart.target)).documentElement!,
+    ))
+      if (isWord(c, "comment"))
+        comments.set(wordAttribute(c, "id") ?? "", {
+          text: descendants(c, "t")
+            .map((t) => t.textContent ?? "")
+            .join(""),
+          author: wordAttribute(c, "author") ?? "",
+          date: wordAttribute(c, "date") ?? "",
+        });
   async function context(
     part: string,
     rels: Map<string, Relationship>,
   ): Promise<ParseContext> {
+    const types = parseXml(
+      await pkg.readText("[Content_Types].xml"),
+    ).documentElement!;
+    const contentType = (path: string) =>
+      childElements(types)
+        .find(
+          (e) =>
+            e.localName === "Override" &&
+            e.getAttribute("PartName") === `/${path}`,
+        )
+        ?.getAttribute("ContentType") ??
+      childElements(types)
+        .find(
+          (e) =>
+            e.localName === "Default" &&
+            e.getAttribute("Extension") === path.split(".").at(-1),
+        )
+        ?.getAttribute("ContentType");
     for (const rel of rels.values()) {
+      if (
+        !rel.external &&
+        ["model3d", "package", "oleObject"].includes(rel.type) &&
+        !assets.has(rel.target) &&
+        pkg.hasPart(rel.target)
+      ) {
+        if (rel.target.endsWith(".xlsx")) {
+          try {
+            spreadsheets.set(
+              rel.target,
+              await spreadsheetRows(await pkg.readBinary(rel.target)),
+            );
+          } catch {
+            /* Preserve unsupported workbooks as embedded files. */
+          }
+        }
+        const original = await pkg.readBinary(rel.target),
+          unpacked =
+            rel.type === "oleObject" ? unpackFile(original) : undefined;
+        if (unpacked) attachmentNames.set(rel.target, unpacked.name);
+        const mime = unpacked
+            ? ((
+                {
+                  txt: "text/plain",
+                  pdf: "application/pdf",
+                  png: "image/png",
+                  jpg: "image/jpeg",
+                  csv: "text/csv",
+                } as Record<string, string>
+              )[unpacked.name.split(".").at(-1)!.toLowerCase()] ??
+              "application/octet-stream")
+            : rel.type === "model3d"
+              ? "model/gltf-binary"
+              : rel.target.endsWith(".xlsx")
+                ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                : (contentType(rel.target) ?? "application/octet-stream"),
+          bytes = unpacked?.bytes ?? original;
+        let raw = "";
+        for (let i = 0; i < bytes.length; i += 8192)
+          raw += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        assets.set(rel.target, `data:${mime};base64,${btoa(raw)}`);
+      }
+      if (
+        !rel.external &&
+        rel.type === "chart" &&
+        !charts.has(rel.target) &&
+        pkg.hasPart(rel.target)
+      ) {
+        const chart = readChart(
+          parseXml(await pkg.readText(rel.target)).documentElement!,
+        );
+        if (chart) charts.set(rel.target, chart);
+      }
       if (
         rel.external ||
         rel.type !== "image" ||
@@ -128,6 +226,10 @@ export async function parseDocxPackage(
       numbering: new Numbering(numberingXml, theme),
       relationships: rels,
       assets,
+      attachmentNames,
+      charts,
+      spreadsheets,
+      comments,
       warn: warning(part),
       numberingLanguage: sourceLanguage,
       onParagraph:
@@ -137,6 +239,7 @@ export async function parseDocxPackage(
   }
   const ctx = await context(path, relationships);
   const document = parseDocumentXml(xml, ctx);
+  document.properties = await readProperties(pkg);
   if (sourceLanguage) document.language = sourceLanguage;
   const body = childWord(xml.documentElement!, "body")!;
   const section = childWord(body, "sectPr");
@@ -168,6 +271,34 @@ export async function parseDocxPackage(
       if (value !== undefined) page.margins![side] = value / 20;
     }
     document.page = page;
+    page.mirrorMargins = onOff(
+      settingsXml && childWord(settingsXml, "mirrorMargins"),
+    );
+    page.hyphenation = onOff(
+      settingsXml && childWord(settingsXml, "autoHyphenation"),
+    )
+      ? "auto"
+      : "none";
+    const gutter = numericAttribute(margins, "gutter");
+    if (gutter !== undefined) page.gutterPt = gutter / 20;
+    page.direction = onOff(childWord(section, "bidi")) ? "rtl" : "ltr";
+    const alignment = childWord(section, "vAlign"),
+      vertical = alignment ? wordAttribute(alignment, "val") : undefined;
+    if (vertical === "center" || vertical === "bottom" || vertical === "top")
+      page.verticalAlignment = vertical;
+    const line = childWord(section, "lnNumType");
+    if (line)
+      page.lineNumbers = {
+        mode:
+          wordAttribute(line, "restart") === "newPage"
+            ? "page"
+            : wordAttribute(line, "restart") === "newSection"
+              ? "section"
+              : "continuous",
+        start: (numericAttribute(line, "start") ?? 0) + 1,
+        countBy: numericAttribute(line, "countBy") ?? 1,
+        distancePt: (numericAttribute(line, "distance") ?? 360) / 20,
+      };
     const columns = childWord(section, "cols");
     const count =
       numericAttribute(columns, "num") ??
@@ -219,11 +350,94 @@ export async function parseDocxPackage(
     theme,
   );
   if (!document.backgroundColor) delete document.backgroundColor;
-  if (descendants(xml.documentElement!, "sectPr").length > 1)
-    ctx.warn(
-      "multiple-sections",
-      "Multiple section layouts are approximated using the final section settings.",
-    );
+  const marked = document.blocks.filter(
+    (b): b is import("../model/document.js").Paragraph =>
+      b.type === "paragraph" && !!b.section,
+  );
+  if (marked.length) {
+    const nodes = descendants(body, "sectPr"),
+      entries = [
+        ...marked.map((p) => ({ paragraph: p, page: p.section! })),
+        { paragraph: undefined, page: document.page ?? {} },
+      ];
+    if (nodes.length === entries.length) {
+      const cache = new Map<string, import("../model/document.js").Block[]>();
+      let headers: StoryVariants = {},
+        footers: StoryVariants = {},
+        previous: PageLayout = {
+          widthPt: 595.3,
+          heightPt: 841.9,
+          margins: {
+            top: 72,
+            bottom: 72,
+            left: 72,
+            right: 72,
+            header: 36,
+            footer: 36,
+          },
+          columns: { count: 1, gapPt: 36 },
+        };
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i],
+          own = readSection(node),
+          page = {
+            ...previous,
+            ...own,
+            margins: { ...previous.margins, ...own.margins },
+            mirrorMargins: document.page?.mirrorMargins,
+            hyphenation: document.page?.hyphenation,
+            evenAndOddHeaders: document.page?.evenAndOddHeaders,
+            pageNumberStart: own.pageNumberStart,
+            lineNumbers: own.lineNumbers,
+            sectionStart: own.sectionStart,
+          };
+        headers = { ...headers };
+        footers = { ...footers };
+        for (const kind of ["header", "footer"] as const)
+          for (const ref of childElements(node).filter(
+            (n) => n.localName === `${kind}Reference`,
+          )) {
+            const variant = wordAttribute(ref, "type"),
+              id = relationshipAttribute(ref, "id"),
+              rel = id && relationships.get(id);
+            if (
+              !variant ||
+              !["first", "default", "even"].includes(variant) ||
+              !rel ||
+              rel.external ||
+              !pkg.hasPart(rel.target)
+            )
+              continue;
+            let blocks = cache.get(rel.target);
+            if (!blocks) {
+              blocks = parseBlocks(
+                parseXml(await pkg.readText(rel.target)).documentElement!,
+                await context(
+                  rel.target,
+                  await readRelationships(pkg, rel.target),
+                ),
+              );
+              cache.set(rel.target, blocks);
+            }
+            (kind === "header" ? headers : footers)[
+              variant as keyof StoryVariants
+            ] = blocks;
+          }
+        if (entries[i].paragraph)
+          entries[i].paragraph!.section = { ...page, headers, footers };
+        else {
+          document.page = page;
+          document.headers = headers;
+          document.footers = footers;
+        }
+        previous = page;
+      }
+    } else
+      ctx.warn(
+        "section-layout",
+        "Some nested section boundaries cannot be previewed independently.",
+      );
+  }
   if (document.headers || document.footers)
     ctx.warn(
       "pagination-approximation",

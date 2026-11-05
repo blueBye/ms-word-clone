@@ -5,15 +5,21 @@ import type { CSSProperties } from "react";
 import type { DocumentIR, Block } from "../model/document.js";
 import { DocumentRenderer } from "./DocumentRenderer.js";
 import { measureBlocks, measureStoryInset } from "./measurement.js";
+import { useLineNumbers } from "./useLineNumbers.js";
+import { splitSections } from "../core/sections.js";
 import {
   paginateBlocks,
   groupColumns,
+  sectionPagePositions,
   pageVariant,
   splitPageBreaks,
   type PageSlice,
 } from "./pagination.js";
 
 export interface PaginatedDocumentProps {
+  pageOffset?: number;
+  totalPageCount?: number;
+  fieldPageOffset?: number;
   document: DocumentIR;
   className?: string;
   /** Increment after registering a FontFace that was already loaded. */
@@ -33,17 +39,116 @@ interface Layout {
   insets: Insets;
 }
 
-export function PaginatedDocument({
+export function PaginatedDocument(props: PaginatedDocumentProps) {
+  const sections = useMemo(() => {
+    const source = splitSections(props.document),
+      result: DocumentIR[] = [];
+    const geometry = (doc: DocumentIR) =>
+      JSON.stringify([
+        doc.page?.widthPt,
+        doc.page?.heightPt,
+        doc.page?.margins,
+        doc.page?.columns,
+        doc.page?.gutterPt,
+        doc.page?.mirrorMargins,
+        doc.page?.direction,
+        doc.page?.verticalAlignment,
+        doc.page?.pageNumberStart,
+        doc.page?.differentFirstPage,
+        doc.page?.evenAndOddHeaders,
+        doc.page?.lineNumbers,
+        doc.page?.hyphenation,
+        doc.headers,
+        doc.footers,
+      ]);
+    for (const section of source) {
+      const previous = result.at(-1);
+      if (
+        previous &&
+        section.page?.sectionStart === "continuous" &&
+        geometry(previous) === geometry(section)
+      )
+        result[result.length - 1] = {
+          ...previous,
+          blocks: [...previous.blocks, ...section.blocks],
+        };
+      else result.push(section);
+    }
+    return result;
+  }, [props.document]);
+  return sections.length === 1 ? (
+    <PaginatedSheetDocument {...props} document={sections[0]} />
+  ) : (
+    <SectionPages {...props} sections={sections} />
+  );
+}
+function SectionPages({
+  sections,
+  ...props
+}: PaginatedDocumentProps & { sections: DocumentIR[] }) {
+  const [counts, setCounts] = useState<Record<number, number>>({});
+  const { positions, total: offset } = sectionPagePositions(sections, counts);
+  useEffect(
+    () => props.onPageCountChange?.(offset),
+    [props.onPageCountChange, offset],
+  );
+  return (
+    <div data-docx-sections="">
+      {sections.map((section, i) => (
+        <div key={i}>
+          {positions[i].blank && (
+            <section
+              data-docx-page={positions[i].before + 1}
+              style={{
+                width: "fit-content",
+                margin: "0 auto 28px",
+                zoom: props.zoom ?? 1,
+                background: "white",
+                boxShadow: "0 2px 12px #243c2c1a",
+                border: "1px solid #d7ded9",
+              }}
+            >
+              <DocumentRenderer
+                document={{ ...sections[Math.max(0, i - 1)], blocks: [] }}
+                pageLayout
+                pageNumber={positions[i].before + 1}
+                pageCount={offset}
+              />
+            </section>
+          )}
+          <PaginatedSheetDocument
+            {...props}
+            document={section}
+            pageOffset={positions[i].offset}
+            totalPageCount={offset}
+            fieldPageOffset={positions[i].fieldOffset}
+            onPageCountChange={(n) =>
+              setCounts((previous) =>
+                previous[i] === n ? previous : { ...previous, [i]: n },
+              )
+            }
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+function PaginatedSheetDocument({
   document: doc,
   className,
   fontRevision = 0,
   onPageCountChange,
   zoom = 1,
   showFormattingMarks = false,
+  pageOffset = 0,
+  totalPageCount,
+  fieldPageOffset = pageOffset,
 }: PaginatedDocumentProps) {
   const blocks = useMemo(() => splitPageBreaks(doc.blocks), [doc]);
   const measureRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<Layout | null>(null);
+  const lineNumbers = useLineNumbers(rootRef, doc, layout, zoom);
   const margins = doc.page?.margins;
   const width = doc.page?.widthPt ?? 595.3;
   const height = doc.page?.heightPt ?? 841.9;
@@ -54,10 +159,12 @@ export function PaginatedDocument({
       : (width -
           (margins?.left ?? 72) -
           (margins?.right ?? 72) -
+          (doc.page?.gutterPt ?? 0) -
           (columnCount - 1) * (doc.page?.columns?.gapPt ?? 36)) /
           columnCount +
         (margins?.left ?? 72) +
-        (margins?.right ?? 72);
+        (margins?.right ?? 72) +
+        (doc.page?.gutterPt ?? 0);
 
   useEffect(() => {
     const container = measureRef.current;
@@ -147,6 +254,7 @@ export function PaginatedDocument({
   };
   return (
     <div
+      ref={rootRef}
       className={className}
       data-docx-pages=""
       data-layout-pending={layout?.source !== doc ? "true" : undefined}
@@ -201,21 +309,68 @@ export function PaginatedDocument({
         return (
           <section
             key={index}
-            aria-label={`Page ${index + 1}`}
-            data-docx-page={index + 1}
+            aria-label={`Page ${pageOffset + index + 1}`}
+            data-docx-page={pageOffset + index + 1}
+            data-docx-section-page={index + 1}
             style={{ width: "fit-content", margin: "0 auto 28px", zoom }}
           >
-            <div style={sheetStyle}>
+            <div style={{ ...sheetStyle, position: "relative" }}>
               <DocumentRenderer
-                document={{ ...doc, blocks: page.blocks }}
+                document={{
+                  ...doc,
+                  blocks: page.blocks,
+                  page: {
+                    ...doc.page,
+                    differentFirstPage: false,
+                    evenAndOddHeaders: false,
+                  },
+                  headers: {
+                    default: doc.headers?.[pageVariant(doc, index + 1)],
+                  },
+                  footers: {
+                    default: doc.footers?.[pageVariant(doc, index + 1)],
+                  },
+                }}
                 pageLayout
-                pageNumber={index + 1}
-                pageCount={current.pages.length}
+                pageNumber={
+                  doc.page?.pageNumberStart
+                    ? index + 1
+                    : fieldPageOffset + index + 1
+                }
+                pageCount={totalPageCount ?? current.pages.length}
                 contentTopPt={inset.top}
                 contentBottomPt={inset.bottom}
                 columnBlocks={page.columns}
                 showFormattingMarks={showFormattingMarks}
               />
+              {lineNumbers
+                .filter((line) => line.page === index + 1)
+                .map((line, i) => (
+                  <span
+                    key={i}
+                    contentEditable={false}
+                    data-docx-line-number=""
+                    style={{
+                      position: "absolute",
+                      top: `${line.top}pt`,
+                      ...(doc.page?.direction === "rtl"
+                        ? {
+                            right: `${(doc.page?.margins?.right ?? 72) - (doc.page?.lineNumbers?.distancePt ?? 18)}pt`,
+                          }
+                        : {
+                            left: `${(doc.page?.margins?.left ?? 72) - (doc.page?.lineNumbers?.distancePt ?? 18)}pt`,
+                          }),
+                      fontSize: "9pt",
+                      color: "#777",
+                      pointerEvents: "none",
+                      userSelect: "none",
+                    }}
+                  >
+                    {new Intl.NumberFormat(doc.language ?? "en").format(
+                      line.number,
+                    )}
+                  </span>
+                ))}
             </div>
             <div
               contentEditable={false}
@@ -227,7 +382,8 @@ export function PaginatedDocument({
                 marginTop: "9px",
               }}
             >
-              Page {index + 1} of {current.pages.length}
+              Page {pageOffset + index + 1} of{" "}
+              {totalPageCount ?? current.pages.length}
               {page.overflow ? " · Oversize content kept together" : ""}
             </div>
           </section>

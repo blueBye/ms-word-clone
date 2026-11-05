@@ -1,10 +1,19 @@
-import type { Block, DocumentIR, Paragraph } from "../model/document.js";
+import type {
+  Block,
+  DocumentIR,
+  Paragraph,
+  DrawingInline,
+} from "../model/document.js";
 type Key = string | number;
 type Patch = { value?: Paragraph; children: Map<Key, Patch> };
 
 /** Stable paragraph locations let a text edit copy its ancestor arrays without walking every run. */
 export function paragraphLocations(document: DocumentIR) {
   const locations = new Map<string, Key[][]>();
+  const drawing = (d: DrawingInline, path: Key[]) => {
+    if (d.blocks) visit(d.blocks, [...path, "blocks"]);
+    d.children?.forEach((c, i) => drawing(c, [...path, "children", i]));
+  };
   const visit = (blocks: Block[], path: Key[]) =>
     blocks.forEach((block, index) => {
       const here = [...path, index];
@@ -12,8 +21,8 @@ export function paragraphLocations(document: DocumentIR) {
         if (block.id)
           locations.set(block.id, [...(locations.get(block.id) ?? []), here]);
         block.children.forEach((inline, i) => {
-          if (inline.type === "drawing" && inline.blocks)
-            visit(inline.blocks, [...here, "children", i, "blocks"]);
+          if (inline.type === "drawing")
+            drawing(inline, [...here, "children", i]);
         });
       } else
         block.rows.forEach((row, r) =>
@@ -21,6 +30,16 @@ export function paragraphLocations(document: DocumentIR) {
             visit(cell.blocks, [...here, "rows", r, "cells", c, "blocks"]),
           ),
         );
+      if (block.type === "paragraph")
+        for (const kind of ["headers", "footers"] as const)
+          for (const variant of ["default", "first", "even"] as const)
+            if (block.section?.[kind]?.[variant])
+              visit(block.section[kind]![variant]!, [
+                ...here,
+                "section",
+                kind,
+                variant,
+              ]);
     });
   visit(document.blocks, ["blocks"]);
   for (const story of ["headers", "footers"] as const)

@@ -291,6 +291,23 @@ export function parseParagraphProperties(
       : undefined,
     keepNext: onOff(childWord(pPr, "keepNext")),
     keepLines: onOff(childWord(pPr, "keepLines")),
+    suppressLineNumbers: onOff(childWord(pPr, "suppressLineNumbers")),
+    ...(childWord(pPr, "framePr") &&
+    ["drop", "margin"].includes(
+      wordAttribute(childWord(pPr, "framePr")!, "dropCap") ?? "",
+    )
+      ? {
+          dropCap: {
+            lines: numericAttribute(childWord(pPr, "framePr"), "lines") ?? 3,
+            distancePt:
+              (numericAttribute(childWord(pPr, "framePr"), "hSpace") ?? 72) /
+              20,
+            kind: wordAttribute(childWord(pPr, "framePr")!, "dropCap") as
+              | "drop"
+              | "margin",
+          },
+        }
+      : {}),
     pageBreakBefore: onOff(childWord(pPr, "pageBreakBefore")),
     contextualSpacing: onOff(childWord(pPr, "contextualSpacing")),
     backgroundColor: colorValue(childWord(pPr, "shd"), "fill", theme),

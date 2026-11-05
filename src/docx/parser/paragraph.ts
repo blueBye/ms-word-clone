@@ -17,6 +17,8 @@ import {
 } from "./properties.js";
 import { relationshipAttribute, safeHyperlink } from "../relationships.js";
 import type { BlockParser, ParseContext } from "./context.js";
+import { equationText } from "../equation.js";
+import { readSection } from "../section.js";
 
 export function parseParagraph(
   p: Element,
@@ -53,15 +55,70 @@ export function parseParagraph(
       );
   }
   const children: Inline[] = [];
+  const bookmarks: NonNullable<Paragraph["bookmarks"]> = [],
+    comments: NonNullable<Paragraph["comments"]> = [];
+  const bookmarkIds = new Map<string, number>(),
+    commentIds = new Map<string, number>();
+  let position = 0;
   const fields: { instruction: string; result: boolean }[] = [];
   const fieldKind = (instruction: string) =>
     /^\s*NUMPAGES\b/i.test(instruction)
       ? ("pages" as const)
       : /^\s*PAGE\b/i.test(instruction)
         ? ("page" as const)
-        : undefined;
+        : /^\s*DATE\b/i.test(instruction)
+          ? ("date" as const)
+          : /^\s*(?:DOCPROPERTY\s+)?TITLE\b/i.test(instruction)
+            ? ("title" as const)
+            : /^\s*(?:DOCPROPERTY\s+)?AUTHOR\b/i.test(instruction)
+              ? ("author" as const)
+              : undefined;
   function visit(parent: Element, href?: string): void {
     for (const c of contentElements(parent)) {
+      if (c.localName === "oMath" && c.namespaceURI?.includes("math")) {
+        const expression = equationText(c);
+        children.push({
+          type: "drawing",
+          alt: "Equation",
+          widthPt: Math.min(432, Math.max(48, expression.length * 5)),
+          heightPt: expression.includes("frac") ? 48 : 24,
+          equation: { expression },
+        });
+        continue;
+      }
+      if (isWord(c, "bookmarkStart")) {
+        bookmarkIds.set(wordAttribute(c, "id") ?? "", bookmarks.length);
+        bookmarks.push({
+          name: wordAttribute(c, "name") ?? "",
+          start: position,
+          end: position,
+        });
+        continue;
+      }
+      if (isWord(c, "bookmarkEnd")) {
+        const index = bookmarkIds.get(wordAttribute(c, "id") ?? "");
+        if (index !== undefined) bookmarks[index].end = position;
+        continue;
+      }
+      if (isWord(c, "commentRangeStart")) {
+        const key = wordAttribute(c, "id") ?? "",
+          data = context?.comments?.get(key);
+        commentIds.set(key, comments.length);
+        comments.push({
+          key,
+          start: position,
+          end: position,
+          text: data?.text ?? "",
+          author: data?.author ?? "",
+          date: data?.date ?? "",
+        });
+        continue;
+      }
+      if (isWord(c, "commentRangeEnd")) {
+        const index = commentIds.get(wordAttribute(c, "id") ?? "");
+        if (index !== undefined) comments[index].end = position;
+        continue;
+      }
       if (isWord(c, "r")) {
         for (const node of childElements(c)) {
           if (
@@ -86,6 +143,10 @@ export function parseParagraph(
             if (field?.result) inline.field = fieldKind(field.instruction);
           }
         children.push(...inlines);
+        position += inlines.reduce(
+          (n, r) => n + (r.type === "text" ? r.text.length : 0),
+          0,
+        );
         for (const node of childElements(c))
           if (
             isWord(node, "fldChar") &&
@@ -124,6 +185,11 @@ export function parseParagraph(
     }
   }
   visit(p);
+  if (children[0]?.type === "break" && children[0].kind === "column") {
+    children.shift();
+    direct.columnBreakBefore = true;
+    properties = { ...properties, columnBreakBefore: true };
+  }
   const mark = pPr && childWord(pPr, "rPr");
   const markProperties = mergeRun(
     resolved?.run ?? {},
@@ -151,6 +217,11 @@ export function parseParagraph(
     };
   }
   const paragraph: Paragraph = {
+    ...(pPr && childWord(pPr, "sectPr")
+      ? { section: readSection(childWord(pPr, "sectPr")!) }
+      : {}),
+    ...(bookmarks.length ? { bookmarks } : {}),
+    ...(comments.length ? { comments } : {}),
     type: "paragraph",
     properties,
     children,

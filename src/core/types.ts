@@ -1,5 +1,7 @@
 import type {
   DocumentIR,
+  DrawingInline,
+  PageLayout,
   ParagraphProperties,
   RunProperties,
 } from "../model/document.js";
@@ -53,6 +55,9 @@ export interface RunFormat {
   complexScriptItalic?: boolean;
 }
 export interface ParagraphFormat {
+  columnBreakBefore?: boolean;
+  suppressLineNumbers?: boolean;
+  dropCap?: ParagraphProperties["dropCap"];
   direction?: "rtl" | "ltr";
   alignment?: "left" | "center" | "right" | "justify";
   spaceBeforePt?: number;
@@ -69,7 +74,83 @@ export interface ParagraphFormat {
   borders?: "none" | "all" | "outside" | "top" | "bottom" | "left" | "right";
 }
 export type EditCommand =
-  | { type: "columns"; count: number; gapPt?: number; separator?: boolean }
+  | {
+      type: "sectionBreak";
+      id: string;
+      start: number;
+      end: number;
+      kind: "nextPage" | "continuous" | "evenPage" | "oddPage";
+    }
+  | {
+      type: "dropCap";
+      id: string;
+      lines: number;
+      distancePt: number;
+      kind: "drop" | "margin";
+      remove?: boolean;
+    }
+  | {
+      type: "insertField";
+      id?: string;
+      field: "page" | "pages" | "date" | "title" | "author";
+      value: string;
+    }
+  | {
+      type: "insertBreak";
+      id: string;
+      start: number;
+      end: number;
+      kind: "page" | "column";
+    }
+  | {
+      type: "cover";
+      title: string;
+      subtitle: string;
+      author: string;
+      date: string;
+      design: "simple" | "banded" | "sideline";
+      remove?: boolean;
+    }
+  | {
+      type: "arrange";
+      objects: { id: string; index: number }[];
+      action: string;
+    }
+  | { type: "insertDrawing"; id?: string; drawing: DrawingInline }
+  | {
+      type: "drawing";
+      id: string;
+      index: number;
+      drawing?: DrawingInline;
+      remove?: boolean;
+    }
+  | { type: "layout"; id?: string; format: Partial<PageLayout> }
+  | {
+      type: "bookmark";
+      id: string;
+      name: string;
+      start: number;
+      end: number;
+      remove?: boolean;
+    }
+  | {
+      type: "comment";
+      id: string;
+      key: string;
+      start: number;
+      end: number;
+      text: string;
+      author: string;
+      date: string;
+      remove?: boolean;
+    }
+  | {
+      type: "columns";
+      id?: string;
+      count: number;
+      gapPt?: number;
+      separator?: boolean;
+    }
   | {
       type: "insertImage";
       id?: string;
@@ -88,6 +169,7 @@ export type EditCommand =
     }
   | {
       type: "story";
+      id?: string;
       kind: "header" | "footer";
       variant?: "default" | "first" | "even";
       remove?: boolean;
@@ -164,9 +246,18 @@ export type EditCommand =
       text: string;
       pageBreakBefore?: boolean;
     }
-  | { type: "insertTable"; id?: string; rows: number; columns: number }
+  | {
+      type: "insertTable";
+      id?: string;
+      rows: number;
+      columns: number;
+      cells?: string[][];
+      header?: boolean;
+      columnWidthsPt?: number[];
+    }
   | {
       type: "page";
+      id?: string;
       widthPt: number;
       heightPt: number;
       margins?: { top: number; bottom: number; left: number; right: number };

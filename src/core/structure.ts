@@ -1,4 +1,9 @@
-import type { Block, DocumentIR, Paragraph } from "../model/document.js";
+import type {
+  Block,
+  DocumentIR,
+  Paragraph,
+  DrawingInline,
+} from "../model/document.js";
 import type { EditCommand, ParagraphCapability } from "./types.js";
 import {
   paragraphText,
@@ -12,6 +17,7 @@ import { runAtPosition } from "./selection.js";
 import { runProperties } from "./text.js";
 import { mergeRun } from "./format.js";
 import { imageData } from "./assets.js";
+import { validateDrawing } from "./objects.js";
 
 export function editStructure(
   document: DocumentIR,
@@ -66,6 +72,7 @@ export function editStructure(
             end: text.length,
             text: "",
           });
+          delete first.section;
           const second = {
             ...rewriteParagraph(p, {
               type: "text",
@@ -75,6 +82,12 @@ export function editStructure(
               text: "",
             }),
             id: newId(),
+            directProperties: {
+              ...p.directProperties,
+              pageBreakBefore: false,
+              columnBreakBefore: false,
+              dropCap: undefined,
+            },
           };
           if (!paragraphText(second)) {
             const run = runAtPosition(p, command.start);
@@ -154,10 +167,16 @@ export function editStructure(
       } else if (
         command.type === "insertParagraph" ||
         command.type === "insertTable" ||
-        command.type === "insertImage"
+        command.type === "insertImage" ||
+        command.type === "insertDrawing" ||
+        command.type === "insertField"
       ) {
         result.splice(index + 1, 0, makeBlock(command));
-        if (command.type === "insertImage") {
+        if (
+          command.type === "insertImage" ||
+          command.type === "insertDrawing" ||
+          command.type === "insertField"
+        ) {
           const next = paragraph();
           result.splice(index + 2, 0, next);
           selection = { id: next.id!, start: 0, end: 0 };
@@ -173,20 +192,49 @@ export function editStructure(
             cells: r.cells.map((c) => ({ ...c, blocks: transform(c.blocks) })),
           })),
         };
+      const drawing = (r: DrawingInline): DrawingInline => ({
+        ...r,
+        ...(r.blocks ? { blocks: transform(r.blocks) } : {}),
+        ...(r.children ? { children: r.children.map(drawing) } : {}),
+      });
       return {
         ...b,
         children: b.children.map((r) =>
-          r.type === "drawing" && r.blocks
-            ? { ...r, blocks: transform(r.blocks) }
-            : r,
+          r.type === "drawing" ? drawing(r) : r,
         ),
+        ...(b.section
+          ? {
+              section: {
+                ...b.section,
+                ...Object.fromEntries(
+                  (["headers", "footers"] as const)
+                    .filter((k) => b.section?.[k])
+                    .map((k) => [
+                      k,
+                      Object.fromEntries(
+                        Object.entries(b.section![k]!).map(
+                          ([variant, blocks]) => [variant, transform(blocks!)],
+                        ),
+                      ),
+                    ]),
+                ),
+              },
+            }
+          : {}),
       };
     });
   };
   const makeBlock = (
     insert: Extract<
       EditCommand,
-      { type: "insertParagraph" | "insertTable" | "insertImage" }
+      {
+        type:
+          | "insertParagraph"
+          | "insertTable"
+          | "insertImage"
+          | "insertDrawing"
+          | "insertField";
+      }
     >,
   ): Block => {
     if (insert.type === "insertParagraph") {
@@ -196,6 +244,23 @@ export function editStructure(
         p.directProperties = { pageBreakBefore: true };
       return p;
     }
+    if (insert.type === "insertField") {
+      validateText(insert.value);
+      return {
+        ...paragraph(),
+        children: [
+          {
+            type: "text",
+            text: insert.value,
+            properties: {},
+            directProperties: {},
+            field: insert.field,
+          },
+        ],
+      };
+    }
+    if (insert.type === "insertDrawing")
+      return { ...paragraph(), children: [validateDrawing(insert.drawing)] };
     if (insert.type === "insertImage") {
       imageData(insert.dataUrl);
       return {
@@ -215,16 +280,26 @@ export function editStructure(
       columns = finite(insert.columns, 1, 20);
     if (!Number.isInteger(rows) || !Number.isInteger(columns))
       throw new Error("Table dimensions must be whole numbers.");
+    insert.cells?.flat().forEach(validateText);
+    if (
+      insert.columnWidthsPt &&
+      (insert.columnWidthsPt.length !== columns ||
+        insert.columnWidthsPt.some(
+          (w) => !Number.isFinite(w) || w < 1 || w > 15840,
+        ))
+    )
+      throw new Error("Provide one positive width per table column.");
     return {
       type: "table",
       properties: { width: { unit: "percent", value: 100 } },
-      columnsPt: [],
-      rows: Array.from({ length: rows }, () => ({
+      columnsPt: insert.columnWidthsPt ?? [],
+      rows: Array.from({ length: rows }, (_, row) => ({
+        header: insert.header && row === 0,
         cells: Array.from({ length: columns }, (_, column) => ({
           column,
           columnSpan: 1,
           rowSpan: 1,
-          blocks: [paragraph()],
+          blocks: [paragraph(insert.cells?.[row]?.[column] ?? "")],
         })),
       })),
     };
@@ -240,11 +315,17 @@ export function editStructure(
     if (
       (command.type === "insertParagraph" ||
         command.type === "insertTable" ||
-        command.type === "insertImage") &&
+        command.type === "insertImage" ||
+        command.type === "insertDrawing" ||
+        command.type === "insertField") &&
       !command.id
     ) {
       result.blocks = [...result.blocks, makeBlock(command)];
-      if (command.type === "insertImage") {
+      if (
+        command.type === "insertImage" ||
+        command.type === "insertDrawing" ||
+        command.type === "insertField"
+      ) {
         const next = paragraph();
         result.blocks.push(next);
         selection = { id: next.id!, start: 0, end: 0 };

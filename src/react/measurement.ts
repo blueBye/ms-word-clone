@@ -1,17 +1,18 @@
-import type { BlockMeasurement } from './pagination.js';
+import type { BlockMeasurement } from "./pagination.js";
 
 const PT_PER_PX = 0.75;
 const number = (value: string) => parseFloat(value) || 0;
 
 export function measureBlocks(body: Element): BlockMeasurement[] {
-  return Array.from(body.children).map((element) => {
+  const elements = Array.from(body.children);
+  const measurements = elements.map((element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     const rows =
-      element.tagName === 'TABLE'
+      element.tagName === "TABLE"
         ? Array.from(
             element.querySelectorAll<HTMLTableRowElement>(
-              ':scope > tbody > tr',
+              ":scope > tbody > tr",
             ),
           )
         : undefined;
@@ -21,7 +22,7 @@ export function measureBlocks(body: Element): BlockMeasurement[] {
         PT_PER_PX,
       tableWidthPt: rows ? rect.width * PT_PER_PX : undefined,
       columnWidthsPt: rows
-        ? Array.from(element.querySelectorAll(':scope > colgroup > col')).map(
+        ? Array.from(element.querySelectorAll(":scope > colgroup > col")).map(
             (col) => col.getBoundingClientRect().width * PT_PER_PX,
           )
         : undefined,
@@ -56,12 +57,22 @@ export function measureBlocks(body: Element): BlockMeasurement[] {
       ),
     };
   });
+  elements.forEach((element, i) => {
+    if (getComputedStyle(element).float !== "none" && measurements[i + 1]) {
+      measurements[i + 1].heightPt = Math.max(
+        measurements[i].heightPt,
+        measurements[i + 1].heightPt,
+      );
+      measurements[i].heightPt = 0;
+    }
+  });
+  return measurements;
 }
 
 /** Floating drawings/textboxes can extend beyond their story's flow box. */
 export function measureStoryInset(
   story: Element | null | undefined,
-  kind: 'header' | 'footer',
+  kind: "header" | "footer",
 ): number {
   if (!story?.parentElement) return 0;
   const page = story.parentElement.getBoundingClientRect();
@@ -69,17 +80,17 @@ export function measureStoryInset(
   let top = flow.top;
   let bottom = flow.bottom;
   for (const element of Array.from(
-    story.querySelectorAll('[data-docx-paragraph], [data-docx-drawing], table'),
+    story.querySelectorAll("[data-docx-paragraph], [data-docx-drawing], table"),
   )) {
     if (element.closest('[data-docx-behind-text="true"]')) continue;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
-    if (style.display === 'none' || (!rect.height && !rect.width)) continue;
+    if (style.display === "none" || (!rect.height && !rect.width)) continue;
     top = Math.min(top, rect.top - number(style.marginTop));
     bottom = Math.max(bottom, rect.bottom + number(style.marginBottom));
   }
   return (
-    Math.max(0, kind === 'header' ? bottom - page.top : page.bottom - top) *
+    Math.max(0, kind === "header" ? bottom - page.top : page.bottom - top) *
     PT_PER_PX
   );
 }

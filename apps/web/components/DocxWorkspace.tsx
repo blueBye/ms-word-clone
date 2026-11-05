@@ -8,6 +8,8 @@ import {
   type ParagraphFormat,
   type RunFormat,
   similarFormatting,
+  pageForParagraph,
+  sectionTarget,
 } from "@local/docx-ir-engine/core";
 import {
   openDocxSession,
@@ -45,10 +47,19 @@ import { ClipboardPane } from "./editor/ClipboardPane";
 import { useClipboard } from "./editor/useClipboard";
 import { ParagraphRuler } from "./editor/ParagraphRuler";
 import { InsertLinkDialog } from "./editor/InsertLinkDialog";
+import { AuthoringDialog } from "./editor/AuthoringDialog";
+import {
+  ObjectPanel,
+  type ObjectRef,
+  documentObjects,
+} from "./editor/ObjectPanel";
+import { AssetDialog } from "./editor/AssetDialog";
 import { StylesPane } from "./editor/StylesPane";
 import type { MenuAnchor } from "./editor/HomeMenu";
 
 type Pane =
+  | "objects"
+  | "comments"
   | "clipboard"
   | "find"
   | "replace"
@@ -60,6 +71,8 @@ type Pane =
   | null;
 const MAX_BYTES = 50 * 1024 * 1024;
 const titles: Record<Exclude<Pane, null>, string> = {
+  objects: "Selection",
+  comments: "Comments",
   clipboard: "Clipboard",
   find: "Navigation",
   replace: "Find and replace",
@@ -71,6 +84,11 @@ const titles: Record<Exclude<Pane, null>, string> = {
 };
 
 export function DocxWorkspace() {
+  const [assetDialog, setAssetDialog] = useState<
+    "model3d" | "object" | "spreadsheet" | null
+  >(null);
+  const [authoring, setAuthoring] = useState<string | null>(null),
+    [selectedObjects, setSelectedObjects] = useState<ObjectRef[]>([]);
   const [document, setDocument] = useState<DocumentIR | null>(null),
     [session, setSession] = useState<DocxSession | null>(null);
   const [filename, setFilename] = useState("Sample document.docx"),
@@ -135,11 +153,51 @@ export function DocxWorkspace() {
     canvas = useRef<HTMLDivElement>(null),
     textInput = useRef<HTMLTextAreaElement>(null);
   const pictureInput = useRef<HTMLInputElement>(null);
+  const textFileInput = useRef<HTMLInputElement>(null);
   const request = useRef(0),
     changing = useRef(false),
     activeSession = useRef<DocxSession | null>(null);
   const all = useMemo(() => paragraphs(document), [document]),
     selected = all.find((p) => p.id === selectedId);
+  const objects = documentObjects(all);
+  const activeDocument = useMemo(() => {
+    if (!document) return null;
+    const target = sectionTarget(document, selectedId);
+    return {
+      ...document,
+      page: pageForParagraph(document, selectedId),
+      headers: target?.section?.headers ?? document.headers,
+      footers: target?.section?.footers ?? document.footers,
+    };
+  }, [document, selectedId]);
+  useEffect(() => {
+    const root = canvas.current;
+    if (!root) return;
+    const paint = () =>
+      root
+        .querySelectorAll<HTMLElement>(
+          "[data-drawing-owner][data-drawing-index]",
+        )
+        .forEach((node) =>
+          node.toggleAttribute(
+            "data-object-selected",
+            selectedObjects.some(
+              (o) =>
+                o.id === node.dataset.drawingOwner &&
+                o.index === Number(node.dataset.drawingIndex),
+            ),
+          ),
+        );
+    paint();
+    const observer = new MutationObserver(paint);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-layout-pending"],
+    });
+    return () => observer.disconnect();
+  }, [selectedObjects, document]);
   const text = selected ? paragraphText(selected) : "",
     draftDirty = !!selected && draft !== text;
   const unsaved = draftDirty || (!!session?.dirty && downloaded !== revision);
@@ -173,6 +231,10 @@ export function DocxWorkspace() {
       setRange({ start: picked.start, end: picked.end });
       setDraft(value);
       setScope([]);
+      setSelectedObjects([]);
+      setAuthoring(null);
+      setAssetDialog(null);
+      setEditingStory(null);
     },
     onCommand: execute,
     onCommands: executeMany,
@@ -418,11 +480,25 @@ export function DocxWorkspace() {
     setBusy(true);
     setError("");
     try {
+      if (
+        ["page", "columns", "layout", "story"].includes(command.type) &&
+        !(command as { id?: string }).id
+      )
+        command = { ...command, id: selectedId || undefined } as EditCommand;
       if (command.type !== "text") await flushDraft(active);
       await active.execute(command);
       sync(
         active,
-        command.type === "splitParagraph" || command.type === "joinParagraph"
+        [
+          "splitParagraph",
+          "joinParagraph",
+          "insertDrawing",
+          "insertImage",
+          "insertField",
+          "insertBreak",
+          "sectionBreak",
+          "insertTable",
+        ].includes(command.type)
           ? active.selection
           : undefined,
       );
@@ -451,8 +527,28 @@ export function DocxWorkspace() {
     setError("");
     try {
       await flushDraft(active);
-      await active.executeBatch(commands);
-      sync(active);
+      await active.executeBatch(
+        commands.map((command) =>
+          ["page", "columns", "layout", "story"].includes(command.type) &&
+          !(command as { id?: string }).id
+            ? ({ ...command, id: selectedId || undefined } as EditCommand)
+            : command,
+        ),
+      );
+      sync(
+        active,
+        commands.some((c) =>
+          [
+            "insertDrawing",
+            "insertImage",
+            "insertField",
+            "insertBreak",
+            "sectionBreak",
+          ].includes(c.type),
+        )
+          ? active.selection
+          : undefined,
+      );
       setRevision((r) => r + 1);
       setNotice(`${commands.length} changes applied as one undo action.`);
       return true;
@@ -780,6 +876,172 @@ export function DocxWorkspace() {
       await execute({ type: "style", styleId: id, gallery: false });
   }
   async function action(name: string) {
+    if (name === "textFromFile") {
+      textFileInput.current?.click();
+      return;
+    }
+    if (name.startsWith("section:")) {
+      const picked = editor.getSelection() ?? {
+        id: selectedId,
+        start: range?.start ?? 0,
+        end: range?.end ?? 0,
+      };
+      await execute({
+        type: "sectionBreak",
+        ...picked,
+        kind: name.slice(8) as
+          | "nextPage"
+          | "continuous"
+          | "evenPage"
+          | "oddPage",
+      });
+      return;
+    }
+    if (name === "object:edit") {
+      const d = objects.find((o) =>
+        selectedObjects.some((ref) => ref.id === o.id && ref.index === o.index),
+      )?.drawing;
+      if (d?.chart) setAuthoring("chart");
+      else if (d?.equation) setAuthoring("equation");
+      else if (d?.spreadsheet) setAssetDialog("spreadsheet");
+      return;
+    }
+    if (name.startsWith("asset:")) {
+      setAssetDialog(name.slice(6) as "model3d" | "object" | "spreadsheet");
+      return;
+    }
+    if (name.startsWith("break:")) {
+      const picked = editor.getSelection() ?? {
+        id: selectedId,
+        start: range?.start ?? 0,
+        end: range?.end ?? 0,
+      };
+      if (name === "break:wrap") insertText("\n");
+      else {
+        if (
+          await execute({
+            type: "insertBreak",
+            ...picked,
+            kind: name.slice(6) as "page" | "column",
+          })
+        ) {
+          const target = activeSession.current?.selection;
+          if (target) editor.select(target, true);
+        }
+      }
+      return;
+    }
+    if (name === "cover:remove") {
+      await execute({
+        type: "cover",
+        title: "",
+        subtitle: "",
+        author: "",
+        date: "",
+        design: "simple",
+        remove: true,
+      });
+      return;
+    }
+    if (name === "screenshot") {
+      let stream: MediaStream | undefined;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const video = window.document.createElement("video");
+        video.srcObject = stream;
+        await video.play();
+        const canvas = window.document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d")!.drawImage(video, 0, 0);
+        const available =
+            (activeDocument?.page?.widthPt ?? 595.3) -
+            (activeDocument?.page?.margins?.left ?? 72) -
+            (activeDocument?.page?.margins?.right ?? 72),
+          scale = Math.min(0.75, available / canvas.width);
+        await execute({
+          type: "insertImage",
+          id: selectedId,
+          dataUrl: canvas.toDataURL("image/png"),
+          widthPt: canvas.width * scale,
+          heightPt: canvas.height * scale,
+          alt: "Screen capture",
+        });
+      } catch (error) {
+        setNotice(
+          error instanceof Error ? error.message : "Screen capture cancelled.",
+        );
+      } finally {
+        stream?.getTracks().forEach((track) => track.stop());
+      }
+      return;
+    }
+    if (name === "video") {
+      setAuthoring("video");
+      return;
+    }
+    if (name.startsWith("dialog:")) {
+      setAuthoring(name.slice(7));
+      return;
+    }
+    if (name === "objects" || name === "comments") {
+      setPane(name);
+      return;
+    }
+    if (name === "object:options") {
+      setPane("objects");
+      return;
+    }
+    if (name.startsWith("object:")) {
+      if (
+        await execute({
+          type: "arrange",
+          objects: selectedObjects,
+          action: name.slice(7),
+        })
+      ) {
+        if (["object:group", "object:ungroup", "object:delete"].includes(name))
+          setSelectedObjects([]);
+      }
+      return;
+    }
+    if (name === "layout:mirror") {
+      await executeMany([
+        {
+          type: "page",
+          widthPt: activeDocument?.page?.widthPt ?? 595.3,
+          heightPt: activeDocument?.page?.heightPt ?? 841.9,
+          margins: { top: 72, bottom: 72, left: 90, right: 72 },
+        },
+        { type: "layout", format: { mirrorMargins: true } },
+      ]);
+      return;
+    }
+    if (name.startsWith("lineNumbers:")) {
+      const mode = name.slice(12);
+      await execute({
+        type: "layout",
+        format: {
+          lineNumbers:
+            mode === "none"
+              ? undefined
+              : {
+                  mode: mode as "page" | "section" | "continuous",
+                  start: 1,
+                  countBy: 1,
+                  distancePt: 18,
+                },
+        },
+      });
+      return;
+    }
+    if (name.startsWith("hyphenation:")) {
+      await execute({
+        type: "layout",
+        format: { hyphenation: name.slice(12) as "auto" | "none" },
+      });
+      return;
+    }
     if (name.startsWith("columns:")) {
       await execute({ type: "columns", count: Number(name.slice(8)) });
       return;
@@ -941,8 +1203,8 @@ export function DocxWorkspace() {
       insertText(name.slice(7));
       return;
     }
-    const w = document?.page?.widthPt ?? 595.3,
-      h = document?.page?.heightPt ?? 841.9;
+    const w = activeDocument?.page?.widthPt ?? 595.3,
+      h = activeDocument?.page?.heightPt ?? 841.9;
     if (name.startsWith("margins:")) {
       const [top, right, bottom, left] = name.slice(8).split(",").map(Number);
       page(w, h, { top, right, bottom, left });
@@ -1145,28 +1407,38 @@ export function DocxWorkspace() {
     kind: "header" | "footer",
     operation = "edit",
     pageNumber = currentPage,
+    scopeId = selectedId,
   ) {
     const active = activeSession.current;
     if (!active) return;
+    const page = pageForParagraph(active.document, scopeId);
+    const storyBlocks = () => {
+      const target = sectionTarget(active.document, scopeId);
+      return target?.section?.[stories] ?? active.document[stories];
+    };
     const variant =
-      active.document.page?.differentFirstPage && pageNumber === 1
+      page.differentFirstPage && pageNumber === 1
         ? "first"
-        : active.document.page?.evenAndOddHeaders && pageNumber % 2 === 0
+        : page.evenAndOddHeaders && pageNumber % 2 === 0
           ? "even"
           : "default";
     const stories = kind === "header" ? "headers" : "footers";
     if (operation === "remove") {
-      await execute({ type: "story", kind, variant, remove: true });
+      await execute({
+        type: "story",
+        id: scopeId,
+        kind,
+        variant,
+        remove: true,
+      });
       setEditingStory(null);
       return;
     }
-    if (
-      operation === "number" ||
-      !active.document[stories]?.[variant]?.length
-    ) {
+    if (operation === "number" || !storyBlocks()?.[variant]?.length) {
       if (
         !(await execute({
           type: "story",
+          id: scopeId,
           kind,
           variant,
           pageNumber: operation === "number",
@@ -1176,7 +1448,7 @@ export function DocxWorkspace() {
         return;
     }
     setEditingStory(kind);
-    const blocks = active.document[stories]?.[variant];
+    const blocks = storyBlocks()?.[variant];
     let p = blocks
       ? paragraphs({
           ...active.document,
@@ -1186,11 +1458,19 @@ export function DocxWorkspace() {
         }).find((p) => active.capability(p.id!).text)
       : undefined;
     if (!p && operation === "edit") {
-      if (!(await execute({ type: "story", kind, variant, appendText: true })))
+      if (
+        !(await execute({
+          type: "story",
+          id: scopeId,
+          kind,
+          variant,
+          appendText: true,
+        }))
+      )
         return;
       p = paragraphs({
         ...active.document,
-        blocks: active.document[stories]?.[variant] ?? [],
+        blocks: storyBlocks()?.[variant] ?? [],
         headers: undefined,
         footers: undefined,
       }).find((p) => active.capability(p.id!).text);
@@ -1204,8 +1484,8 @@ export function DocxWorkspace() {
   }
   function fit(mode: "width" | "page") {
     if (!canvas.current) return;
-    const w = ((document?.page?.widthPt ?? 595.3) * 4) / 3,
-      h = ((document?.page?.heightPt ?? 841.9) * 4) / 3;
+    const w = ((activeDocument?.page?.widthPt ?? 595.3) * 4) / 3,
+      h = ((activeDocument?.page?.heightPt ?? 841.9) * 4) / 3;
     setZoom(
       Math.max(
         0.25,
@@ -1352,8 +1632,15 @@ export function DocxWorkspace() {
         />
       ) : (
         <Ribbon
+          objectCount={selectedObjects.length}
+          hasGroup={objects.some(
+            (o) =>
+              selectedObjects.some(
+                (ref) => ref.id === o.id && ref.index === o.index,
+              ) && !!o.drawing.children,
+          )}
           tab={tab}
-          document={document}
+          document={activeDocument}
           selected={selected}
           range={range}
           disabled={busy || !!session?.lockedReason}
@@ -1411,38 +1698,128 @@ export function DocxWorkspace() {
           data-editing-story={editingStory ?? undefined}
           aria-label="Document pages"
           aria-busy={busy}
+          tabIndex={-1}
+          onKeyDownCapture={(event) => {
+            if (!selectedObjects.length) return;
+            const input = event.target as HTMLElement;
+            if (input !== canvas.current) return;
+            if (["Delete", "Backspace"].includes(event.key)) {
+              event.preventDefault();
+              event.stopPropagation();
+              void action("object:delete");
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setSelectedObjects([]);
+            } else if (
+              ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(
+                event.key,
+              )
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              const step = event.shiftKey ? 10 : 1;
+              void action(
+                `object:move:${event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0},${event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0}`,
+              );
+            }
+          }}
+          onMouseDownCapture={(event) => {
+            const target = event.target as Element,
+              object = target.closest<HTMLElement>(
+                "[data-drawing-owner][data-drawing-index]",
+              );
+            if (
+              !object ||
+              object.contains(target.closest("[data-paragraph-id]")) ||
+              target.closest("a[download]")
+            ) {
+              setSelectedObjects([]);
+              return;
+            }
+            event.preventDefault();
+            canvas.current?.focus({ preventScroll: true });
+            const ref = {
+              id: object.dataset.drawingOwner!,
+              index: Number(object.dataset.drawingIndex),
+            };
+            setSelectedObjects((previous) =>
+              event.ctrlKey || event.metaKey
+                ? previous.some((o) => o.id === ref.id && o.index === ref.index)
+                  ? previous.filter(
+                      (o) => o.id !== ref.id || o.index !== ref.index,
+                    )
+                  : [...previous, ref]
+                : [ref],
+            );
+          }}
           onMouseUp={capturePageSelection}
           onClick={(event) => {
-            if ((event.target as Element).closest("a")) event.preventDefault();
+            if ((event.target as Element).closest("a:not([download])"))
+              event.preventDefault();
           }}
           onDoubleClick={(event) => {
             const target = event.target as HTMLElement;
+            const object = target.closest<HTMLElement>(
+              "[data-drawing-owner][data-drawing-index]",
+            );
+            if (object) {
+              const d = objects.find(
+                (o) =>
+                  o.id === object.dataset.drawingOwner &&
+                  o.index === Number(object.dataset.drawingIndex),
+              )?.drawing;
+              if (d?.chart || d?.equation || d?.spreadsheet) {
+                setSelectedObjects([
+                  {
+                    id: object.dataset.drawingOwner!,
+                    index: Number(object.dataset.drawingIndex),
+                  },
+                ]);
+                if (d.chart) setAuthoring("chart");
+                else if (d.equation) setAuthoring("equation");
+                else setAssetDialog("spreadsheet");
+                return;
+              }
+            }
             const page = target.closest<HTMLElement>("[data-docx-page]");
             const sheet = target.closest<HTMLElement>("[data-docx-engine]");
             if (!page || !sheet || !document) return;
+            const scopeId =
+              page.querySelector<HTMLElement>(
+                "[data-docx-body] [data-paragraph-id]",
+              )?.dataset.paragraphId ?? selectedId;
+            const layout = pageForParagraph(document, scopeId);
             const bounds = sheet.getBoundingClientRect(),
               y = event.clientY - bounds.top,
-              scale = bounds.height / (document.page?.heightPt ?? 841.9);
+              scale = bounds.height / (layout.heightPt ?? 841.9);
             const story =
               target.closest<HTMLElement>("[data-docx-story]")?.dataset
                 .docxStory;
-            if (
-              story === "header" ||
-              y < (document.page?.margins?.top ?? 72) * scale
-            )
-              void editStory("header", "edit", Number(page.dataset.docxPage));
+            if (story === "header" || y < (layout.margins?.top ?? 72) * scale)
+              void editStory(
+                "header",
+                "edit",
+                Number(page.dataset.docxSectionPage ?? page.dataset.docxPage),
+                scopeId,
+              );
             else if (
               story === "footer" ||
-              y > bounds.height - (document.page?.margins?.bottom ?? 72) * scale
+              y > bounds.height - (layout.margins?.bottom ?? 72) * scale
             )
-              void editStory("footer", "edit", Number(page.dataset.docxPage));
+              void editStory(
+                "footer",
+                "edit",
+                Number(page.dataset.docxSectionPage ?? page.dataset.docxPage),
+                scopeId,
+              );
             else setEditingStory(null);
           }}
         >
           {document && (
             <ParagraphRuler
               container={canvas}
-              document={document}
+              document={activeDocument!}
               selected={selected}
               zoom={zoom}
               disabled={busy}
@@ -1493,6 +1870,61 @@ export function DocxWorkspace() {
             </div>
             <div className="pane-content">
               {pane === "fonts" && <FontPanel fonts={fonts} />}
+              {pane === "objects" && (
+                <ObjectPanel
+                  all={all}
+                  selected={selectedObjects}
+                  onSelect={(ref, multi) =>
+                    setSelectedObjects((previous) =>
+                      multi
+                        ? [
+                            ...previous.filter(
+                              (o) => o.id !== ref.id || o.index !== ref.index,
+                            ),
+                            ref,
+                          ]
+                        : [ref],
+                    )
+                  }
+                  onChange={(ref, drawing) =>
+                    void execute({ type: "drawing", ...ref, drawing })
+                  }
+                  onAction={(name) => void action(name)}
+                />
+              )}
+              {pane === "comments" &&
+                all.flatMap((p) =>
+                  (p.comments ?? []).map((c) => (
+                    <article className="comment-card" key={`${p.id}-${c.key}`}>
+                      <b>{c.author}</b>
+                      <small>{new Date(c.date).toLocaleString()}</small>
+                      <textarea
+                        defaultValue={c.text}
+                        onBlur={(e) =>
+                          void execute({
+                            type: "comment",
+                            id: p.id!,
+                            ...c,
+                            text: e.target.value,
+                          })
+                        }
+                      />
+                      <button onClick={() => jump(p.id!)}>Go to text</button>
+                      <button
+                        onClick={() =>
+                          void execute({
+                            type: "comment",
+                            id: p.id!,
+                            ...c,
+                            remove: true,
+                          })
+                        }
+                      >
+                        Delete
+                      </button>
+                    </article>
+                  )),
+                )}
               {pane === "edit" &&
                 (selected ? (
                   <>
@@ -1698,9 +2130,9 @@ export function DocxWorkspace() {
                 <>
                   <div className="pane-callout">
                     Source-retaining export keeps untouched package parts.
-                    Supported edits include simple paragraph text and
-                    formatting, paragraph properties, body paragraph/table
-                    insertion and single-section page setup.
+                    Supported edits include text and styles, tables, pictures,
+                    shapes, charts, equations, bookmarks, comments, embedded
+                    files, headers/footers and section page setup.
                   </div>
                   <p className="pane-description">
                     Structured text stays locked where it cannot be rewritten
@@ -1892,6 +2324,36 @@ export function DocxWorkspace() {
         />
       )}
       <input
+        ref={textFileInput}
+        hidden
+        type="file"
+        aria-label="Insert text file"
+        accept=".txt,.md,.csv,text/plain,text/csv"
+        onChange={async (event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (!file) return;
+          try {
+            if (file.size > 2_000_000)
+              throw new Error("Choose a text file smaller than 2 MB.");
+            const lines = (await file.text())
+              .replace(/\r\n?/g, "\n")
+              .split("\n");
+            await executeMany(
+              lines.reverse().map((text) => ({
+                type: "insertParagraph",
+                id: selectedId || undefined,
+                text,
+              })),
+            );
+          } catch (error) {
+            setError(
+              error instanceof Error ? error.message : "Could not insert file.",
+            );
+          }
+        }}
+      />
+      <input
         ref={fileInput}
         hidden
         aria-label="Open DOCX"
@@ -1948,7 +2410,7 @@ export function DocxWorkspace() {
       <WorkspaceDialogs
         modal={modal}
         onClose={() => setModal(null)}
-        document={document}
+        document={activeDocument}
         selected={selected}
         filename={filename}
         onFilename={setFilename}
@@ -1956,6 +2418,48 @@ export function DocxWorkspace() {
         canPage={!!session?.canSetPage}
         execute={execute}
       />
+      {assetDialog && (
+        <AssetDialog
+          mode={assetDialog}
+          id={selectedId || undefined}
+          object={objects.find((o) =>
+            selectedObjects.some(
+              (ref) => ref.id === o.id && ref.index === o.index,
+            ),
+          )}
+          execute={executeMany}
+          onClose={() => setAssetDialog(null)}
+        />
+      )}
+      {authoring && document && (
+        <AuthoringDialog
+          mode={authoring}
+          object={objects.find((o) =>
+            selectedObjects.some(
+              (ref) => ref.id === o.id && ref.index === o.index,
+            ),
+          )}
+          document={activeDocument!}
+          all={all}
+          selected={selected}
+          range={range ?? { start: 0, end: 0 }}
+          execute={async (commands) => {
+            const changed = await executeMany(commands);
+            if (changed && authoring === "comment") setPane("comments");
+            return changed;
+          }}
+          onText={insertText}
+          onClose={() => {
+            setAuthoring(null);
+            setTimeout(() => editor.focus(), 0);
+          }}
+          onNavigate={(id, start, end) => {
+            setAuthoring(null);
+            jump(id);
+            editor.select({ id, start, end }, true);
+          }}
+        />
+      )}
       <HomeDialogs
         anchor={homeAnchor}
         contextStyle={contextStyle}

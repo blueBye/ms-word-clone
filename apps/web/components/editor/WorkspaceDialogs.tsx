@@ -88,7 +88,7 @@ export function WorkspaceDialogs(p: Props) {
           }}
         >
           <p className="pane-description">
-            Insert after a body paragraph outside existing tables.
+            Insert a table after the selected paragraph.
           </p>
           <div className="field-row">
             <label className="field">
@@ -141,8 +141,8 @@ export function WorkspaceDialogs(p: Props) {
           }}
         >
           <p className="pane-description">
-            Measurements in points. 72 pt = 1 inch. Applies to the document’s
-            single section.
+            Measurements in points. 72 pt = 1 inch. Applies to the selected
+            section.
           </p>
           <div className="field-row">
             <label className="field">

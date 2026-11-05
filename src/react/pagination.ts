@@ -14,6 +14,39 @@ export interface BlockMeasurement {
   tableWidthPt?: number;
   columnWidthsPt?: number[];
 }
+/** Physical parity pages and logical PAGE fields use different counters after a restart. */
+export function sectionPagePositions(
+  sections: DocumentIR[],
+  counts: Record<number, number>,
+) {
+  let total = 0,
+    number = 1;
+  const positions = sections.map((section, i) => {
+    const kind = section.page?.sectionStart,
+      blank =
+        i > 0 &&
+        ((kind === "oddPage" && (total + 1) % 2 === 0) ||
+          (kind === "evenPage" && (total + 1) % 2 === 1)),
+      before = total;
+    if (blank) {
+      total++;
+      number++;
+    }
+    const restart = section.page?.pageNumberStart;
+    if (restart !== undefined) number = restart;
+    const position = {
+      offset: total,
+      blank,
+      before,
+      fieldOffset: restart !== undefined ? 0 : number - 1,
+    };
+    const count = counts[i] ?? 1;
+    total += count;
+    number += count;
+    return position;
+  });
+  return { positions, total };
+}
 export interface CellMeasurement {
   /** Block bounds include paragraph margins, in the cell's coordinate space. */
   blocks: { startPt: number; endPt: number }[];
@@ -235,9 +268,15 @@ export function paginateBlocks(
       isEmptyTableEndParagraph(block, blocks[index - 1])
     )
       continue;
-    if (block.type === "paragraph" && block.properties.pageBreakBefore)
+    if (
+      block.type === "paragraph" &&
+      (block.properties.pageBreakBefore || block.properties.columnBreakBefore)
+    )
       finish();
-    if (block.type === "paragraph" && block.properties.keepNext) {
+    if (
+      block.type === "paragraph" &&
+      (block.properties.keepNext || block.properties.dropCap)
+    ) {
       let chain = height;
       for (let next = index + 1; next < blocks.length; next++) {
         chain += measurements[next]?.heightPt ?? 0;

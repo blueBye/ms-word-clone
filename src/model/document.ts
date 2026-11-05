@@ -1,5 +1,6 @@
 /** Portable document model with authored and computed formatting. Measurements are points unless explicit. */
 export interface DocumentIR {
+  properties?: Record<string, string>;
   type: "document";
   schemaVersion: 2;
   blocks: Block[];
@@ -19,6 +20,18 @@ export type StoryVariants = Partial<
   Record<"first" | "default" | "even", Block[]>
 >;
 export interface PageLayout {
+  sectionStart?: "nextPage" | "continuous" | "evenPage" | "oddPage";
+  mirrorMargins?: boolean;
+  gutterPt?: number;
+  hyphenation?: "none" | "auto";
+  lineNumbers?: {
+    mode: "continuous" | "page" | "section";
+    start: number;
+    countBy: number;
+    distancePt: number;
+  };
+  direction?: TextDirection;
+  verticalAlignment?: "top" | "center" | "bottom";
   columns?: { count: number; gapPt: number; separator?: boolean };
   widthPt?: number;
   heightPt?: number;
@@ -49,6 +62,9 @@ export type Borders = Partial<
   Record<"top" | "right" | "bottom" | "left" | "insideH" | "insideV", Border>
 >;
 export interface ParagraphProperties {
+  columnBreakBefore?: boolean;
+  suppressLineNumbers?: boolean;
+  dropCap?: { lines: number; distancePt: number; kind: "drop" | "margin" };
   styleId?: string;
   alignment?: ParagraphAlignment;
   direction?: TextDirection;
@@ -77,6 +93,16 @@ export interface ParagraphProperties {
   };
 }
 export interface Paragraph {
+  section?: PageLayout & { headers?: StoryVariants; footers?: StoryVariants };
+  bookmarks?: { name: string; start: number; end: number }[];
+  comments?: {
+    key: string;
+    start: number;
+    end: number;
+    text: string;
+    author: string;
+    date: string;
+  }[];
   type: "paragraph";
   /** Source location in the current editing session revision; absent in preview-only imports. */
   id?: string;
@@ -139,7 +165,7 @@ export interface TextRun {
   properties: RunProperties;
   directProperties?: RunProperties;
   href?: string;
-  field?: "page" | "pages";
+  field?: "page" | "pages" | "date" | "title" | "author";
 }
 export interface BreakInline {
   type: "break";
@@ -152,6 +178,27 @@ export interface DrawingPosition {
   alignment?: string;
 }
 export interface DrawingInline {
+  spreadsheet?: { cells: string[][] };
+  model3d?: {
+    dataUrl: string;
+    rotation?: { x: number; y: number; z: number };
+    size?: number;
+    center?: [number, number, number];
+    poster?: string;
+  };
+  attachment?: { dataUrl: string; name: string; mime: string; progId?: string };
+  video?: { url: string };
+  chart?: {
+    kind: "bar" | "line" | "pie";
+    title: string;
+    categories: string[];
+    series: { name: string; values: number[] }[];
+  };
+  equation?: { expression: string };
+  id?: string;
+  children?: DrawingInline[];
+  flipH?: boolean;
+  flipV?: boolean;
   type: "drawing";
   widthPt: number;
   heightPt: number;

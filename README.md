@@ -30,7 +30,7 @@ The application lives in `apps/web/`; the engine remains in `src/`. The workspac
 
 The [current architecture review](docs/engine-architecture.md) documents the core/OOXML/UI boundaries, d2ts integration, performance evidence, preservation behavior and remaining work. Run `node scripts/benchmark-engine.mjs` after building to reproduce the core benchmark.
 
-The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. The [Home implementation status](docs/home-editor-status.md) records the current working controls and remaining gaps.
+The [Word interface inventory](docs/word-ui-inventory.md) records the locally inspected File, Home, Insert and Layout commands, menus and dialogs. The [UI implementation plan](docs/word-ui-implementation-plan.md) specifies the ribbon, browser behavior, engine dependencies and phased editing/export gates. The [Home implementation status](docs/home-editor-status.md) and [Insert/Layout status](docs/ribbon-status.md) record working controls, verification and remaining gaps.
 
 The [engine review](docs/engine-review.md) covers the parser, document IR, RTL/LTR typography and remaining compatibility risks. The [feature matrix](docs/compatibility.md) records current support, and the [development plan](docs/development-plan.md) defines staged engine work followed by the Next.js editor.
 

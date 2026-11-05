@@ -40,7 +40,9 @@
   "dependencies": {
     "@electric-sql/d2ts": "0.1.8",
     "@xmldom/xmldom": "^0.9.8",
-    "fflate": "^0.8.2"
+    "cfb": "1.2.2",
+    "fflate": "^0.8.2",
+    "three": "^0.187.0"
   },
   "peerDependencies": {
     "react": ">=18"
@@ -53,6 +55,7 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.187.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "typescript": "^5.6.0",

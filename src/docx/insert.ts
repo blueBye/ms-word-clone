@@ -7,7 +7,14 @@ export async function addRelation(
   pkg: DocxPackage,
   source: string,
   target: string,
-  kind: "image" | "hyperlink",
+  kind:
+    | "image"
+    | "hyperlink"
+    | "chart"
+    | "package"
+    | "model3d"
+    | "coreProperties"
+    | "oleObject",
   w: string,
   external = false,
 ) {
@@ -27,7 +34,11 @@ export async function addRelation(
   relation.setAttribute("Id", `rId${n}`);
   relation.setAttribute(
     "Type",
-    `${w.includes("purl.oclc.org") ? "http://purl.oclc.org/ooxml/officeDocument/relationships" : "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}/${kind}`,
+    kind === "coreProperties"
+      ? "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+      : kind === "model3d"
+        ? "http://schemas.microsoft.com/office/2017/06/relationships/model3d"
+        : `${w.includes("purl.oclc.org") ? "http://purl.oclc.org/ooxml/officeDocument/relationships" : "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}/${kind}`,
   );
   relation.setAttribute("Target", target);
   if (external) relation.setAttribute("TargetMode", "External");

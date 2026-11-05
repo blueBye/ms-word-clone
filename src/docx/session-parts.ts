@@ -47,7 +47,7 @@ function val(parent: Element, name: string, text: string | number) {
 
 /** Add a relationship-backed XML part without rebuilding unrelated package parts. */
 export async function related(
-  kind: "styles" | "numbering" | "header" | "footer",
+  kind: "styles" | "numbering" | "header" | "footer" | "comments",
   changes: Map<string, string>,
   pkg: DocxPackage,
   main: string,

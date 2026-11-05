@@ -403,5 +403,34 @@ export function rewriteParagraph(
       );
     output.push(item);
   }
-  return { ...p, children: output };
+  const move = (pos: number, trailing = false) =>
+    command.type !== "text"
+      ? pos
+      : pos < start || (pos === start && !trailing)
+        ? pos
+        : pos >= end
+          ? pos + command.text.length - (end - start)
+          : start + command.text.length;
+  return {
+    ...p,
+    children: output,
+    ...(p.bookmarks
+      ? {
+          bookmarks: p.bookmarks.map((b) => ({
+            ...b,
+            start: move(b.start),
+            end: move(b.end, true),
+          })),
+        }
+      : {}),
+    ...(p.comments
+      ? {
+          comments: p.comments.map((c) => ({
+            ...c,
+            start: move(c.start),
+            end: move(c.end, true),
+          })),
+        }
+      : {}),
+  };
 }
