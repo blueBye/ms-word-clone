@@ -75,6 +75,10 @@ export function parseParagraph(
               : undefined;
   function visit(parent: Element, href?: string): void {
     for (const c of contentElements(parent)) {
+      if (c.localName === "oMathPara" && c.namespaceURI?.includes("math")) {
+        visit(c, href);
+        continue;
+      }
       if (c.localName === "oMath" && c.namespaceURI?.includes("math")) {
         const expression = equationText(c);
         children.push({

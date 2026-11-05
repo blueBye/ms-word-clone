@@ -4,7 +4,17 @@ import { parseEquation, type MathNode } from "../core/equation.js";
 export function EquationView({ expression }: { expression: string }) {
   const render = (node: MathNode): React.ReactNode =>
     node.kind === "text"
-      ? React.createElement("mtext", null, node.text)
+      ? React.createElement(
+          /^\d$/.test(node.text)
+            ? "mn"
+            : /^\p{L}$/u.test(node.text)
+              ? "mi"
+              : /^\s*$/.test(node.text)
+                ? "mtext"
+                : "mo",
+          null,
+          node.text,
+        )
       : node.kind === "row"
         ? React.createElement("mrow", null, ...node.items.map(render))
         : node.kind === "sqrt"

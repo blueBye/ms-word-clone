@@ -7,7 +7,20 @@ export function validateDrawing(d: DrawingInline, depth = 0): DrawingInline {
   finite(d.widthPt, 1, 15840);
   finite(d.heightPt, 1, 15840);
   validateText(d.alt);
-  if (d.image) imageData(d.image.dataUrl);
+  if (d.image) {
+    imageData(d.image.dataUrl);
+    if (d.image.opacity !== undefined) finite(d.image.opacity, 0, 1);
+    if (d.image.brightness !== undefined) finite(d.image.brightness, -1, 1);
+    if (d.image.contrast !== undefined) finite(d.image.contrast, -1, 1);
+    if (d.image.blurPt !== undefined) finite(d.image.blurPt, 0, 30);
+    for (const value of Object.values(d.image.crop ?? {}))
+      finite(value, 0, 0.95);
+    if (
+      (d.image.crop?.left ?? 0) + (d.image.crop?.right ?? 0) >= 1 ||
+      (d.image.crop?.top ?? 0) + (d.image.crop?.bottom ?? 0) >= 1
+    )
+      throw new Error("Keep some of the picture visible when cropping.");
+  }
   if (d.model3d) modelData(d.model3d.dataUrl);
   if (d.attachment) binaryData(d.attachment.dataUrl);
   if (d.video) videoUrl(d.video.url);

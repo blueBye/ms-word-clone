@@ -4,9 +4,9 @@ import { zipSync, strToU8 } from "fflate";
 const xml = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
   <w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>A document in two directions</w:t></w:r></w:p>
   <w:p><w:r><w:t>Welcome to your document workspace. Click this paragraph and type, or use File to open a DOCX document.</w:t></w:r></w:p>
-  <w:p><w:pPr><w:bidi/><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>این یک پاراگراف فارسی است. می‌توانید فایل خود را باز کنید و نتیجه را ببینید.</w:t></w:r></w:p>
-  <w:p><w:pPr><w:bidi/><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>هذه فقرة باللغة العربية لاختبار اتجاه النص والخط.</w:t></w:r></w:p>
-  <w:p><w:pPr><w:bidi/><w:jc w:val="right"/></w:pPr>
+  <w:p><w:pPr><w:bidi/><w:jc w:val="start"/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>این یک پاراگراف فارسی است. می‌توانید فایل خود را باز کنید و نتیجه را ببینید.</w:t></w:r></w:p>
+  <w:p><w:pPr><w:bidi/><w:jc w:val="start"/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>هذه فقرة باللغة العربية لاختبار اتجاه النص والخط.</w:t></w:r></w:p>
+  <w:p><w:pPr><w:bidi/><w:jc w:val="start"/></w:pPr>
     <w:r><w:rPr><w:rtl/></w:rPr><w:t xml:space="preserve">متن ترکیبی: </w:t></w:r>
     <w:r><w:t xml:space="preserve">English 123 </w:t></w:r>
     <w:r><w:rPr><w:rtl/></w:rPr><w:t>و عدد فارسی ۱۲۳</w:t></w:r>
@@ -17,18 +17,21 @@ const xml = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessi
 
 const sample = zipSync({
   "[Content_Types].xml": strToU8(
-    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>',
   ),
   "_rels/.rels": strToU8(
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
   ),
   "word/_rels/document.xml.rels": strToU8(
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="settings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>',
   ),
   "word/styles.xml": strToU8(
     '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Tahoma"/><w:sz w:val="24"/><w:szCs w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style></w:styles>',
   ),
   "word/document.xml": strToU8(xml),
+  "word/settings.xml": strToU8(
+    '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>',
+  ),
 });
 
 const output = new URL("../apps/web/public/", import.meta.url);

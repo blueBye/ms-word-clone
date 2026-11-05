@@ -8,6 +8,7 @@ import {
   openDocxSession,
 } from "../src/index.js";
 import { docx, documentXml, W, REL, OFFICE_REL } from "./helpers/docx.js";
+import { physicalAlignment } from "../src/core/format.js";
 
 it("updates Title from a recolored substring at a run boundary and keeps later edits linked", async () => {
   const s = await openDocxSession(createBlankDocx());
@@ -288,10 +289,10 @@ it("keeps the shipped sample's English paragraphs LTR when Normal is updated fro
     originalProperties,
   );
   expect(
-    getParagraphs((await importDocx(afterColor)).blocks).map(
-      (p) => p.properties,
+    getParagraphs((await importDocx(afterColor)).blocks).map((p) =>
+      physicalAlignment(p.properties),
     ),
-  ).toEqual(originalProperties);
+  ).toEqual(originalProperties.map(physicalAlignment));
   const normal = (await s.styles()).find((style) => style.id === "Normal")!;
   expect(normal.run.color).toBe("#CC2200");
   expect(normal.paragraph.direction).toBeUndefined();

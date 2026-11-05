@@ -27,6 +27,10 @@ export function chartXml(chart: Chart, relationship: string) {
   add(title, A, "a:bodyPr");
   add(title, A, "a:lstStyle");
   add(add(add(title, A, "a:p"), A, "a:r"), A, "a:t").textContent = chart.title;
+  const titleNode = title.parentNode!.parentNode as Element;
+  add(titleNode, C, "c:layout");
+  add(titleNode, C, "c:overlay", { val: 0 });
+  add(body, C, "c:autoTitleDeleted", { val: 0 });
   const plot = add(body, C, "c:plotArea");
   add(plot, C, "c:layout");
   const drawing = add(plot, C, `c:${chart.kind}Chart`);
@@ -35,6 +39,7 @@ export function chartXml(chart: Chart, relationship: string) {
     add(drawing, C, "c:grouping", {
       val: chart.kind === "bar" ? "clustered" : "standard",
     });
+  add(drawing, C, "c:varyColors", { val: chart.kind === "pie" ? 1 : 0 });
   const cache = (
     p: Element,
     kind: string,
@@ -58,6 +63,7 @@ export function chartXml(chart: Chart, relationship: string) {
     add(ser, C, "c:order", { val: i });
     const column = String.fromCharCode(66 + i);
     cache(add(ser, C, "c:tx"), "str", [series.name], `Sheet1!$${column}$1`);
+    if (chart.kind === "bar") add(ser, C, "c:invertIfNegative", { val: 0 });
     cache(
       add(ser, C, "c:cat"),
       "str",
@@ -81,12 +87,30 @@ export function chartXml(chart: Chart, relationship: string) {
       const axis = add(plot, C, `c:${name}`);
       add(axis, C, "c:axId", { val: id });
       add(add(axis, C, "c:scaling"), C, "c:orientation", { val: "minMax" });
+      add(axis, C, "c:delete", { val: 0 });
       add(axis, C, "c:axPos", { val: pos });
+      if (name === "valAx") {
+        const grid = add(axis, C, "c:majorGridlines"),
+          line = add(add(grid, C, "c:spPr"), A, "a:ln", { w: 6350 });
+        add(add(line, A, "a:solidFill"), A, "a:srgbClr", { val: "D9D9D9" });
+      }
+      if (name === "valAx")
+        add(axis, C, "c:numFmt", { formatCode: "General", sourceLinked: 0 });
+      add(axis, C, "c:majorTickMark", { val: "out" });
+      add(axis, C, "c:minorTickMark", { val: "none" });
+      add(axis, C, "c:tickLblPos", { val: "low" });
       add(axis, C, "c:crossAx", { val: cross });
       add(axis, C, "c:crosses", { val: "autoZero" });
+      if (name === "catAx") {
+        add(axis, C, "c:lblAlgn", { val: "ctr" });
+        add(axis, C, "c:lblOffset", { val: 100 });
+      } else add(axis, C, "c:crossBetween", { val: "between" });
     }
   }
-  add(add(body, C, "c:legend"), C, "c:legendPos", { val: "b" });
+  const legend = add(body, C, "c:legend");
+  add(legend, C, "c:legendPos", { val: "b" });
+  add(legend, C, "c:layout");
+  add(legend, C, "c:overlay", { val: 0 });
   add(body, C, "c:plotVisOnly", { val: 1 });
   const external = add(root, C, "c:externalData");
   external.setAttributeNS(

@@ -8,6 +8,7 @@ import type {
 import { Dialog } from "./Controls";
 import { paragraphText } from "../../lib/editor";
 import { DrawTableGrid } from "./DrawTableGrid";
+import {commentSelection} from "../../lib/comments";
 
 const shapeKinds = [
   "rect",
@@ -420,7 +421,7 @@ export function AuthoringDialog({
               {
                 type: "comment",
                 id,
-                ...range,
+                ...commentSelection(selected ? paragraphText(selected) : "",range),
                 key: `new-${Date.now()}`,
                 text: String(data.get("text")),
                 author: String(data.get("author")),

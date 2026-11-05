@@ -4,5 +4,6 @@ export { getRequiredFonts } from "./DocumentRenderer.js";
 export type { FontRequirement } from "./DocumentRenderer.js";
 export { PaginatedDocument } from "./PaginatedDocument.js";
 export { ModelView } from "./ModelView.js";
+export { EquationView } from "./StructuredObjects.js";
 export type { PaginatedDocumentProps } from "./PaginatedDocument.js";
 export { textEffectsStyle } from "./text-effects.js";

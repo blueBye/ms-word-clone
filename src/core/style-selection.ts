@@ -1,5 +1,32 @@
 import type { Paragraph, RunProperties } from "../model/document.js";
 import type { DocumentStyle, RunFormat } from "./types.js";
+/** Explicitly matching a whole paragraph to a style retains language/bidi semantics. */
+export function normalizeParagraphStyle(
+  p: Paragraph,
+  styleId: string,
+): Paragraph {
+  const semantic = (r: RunProperties = {}) =>
+    Object.fromEntries(
+      Object.entries(r).filter(([key]) =>
+        [
+          "direction",
+          "language",
+          "complexScriptLanguage",
+          "forceComplexScript",
+        ].includes(key),
+      ),
+    );
+  return {
+    ...p,
+    directProperties: { ...p.directProperties, styleId },
+    directMarkProperties: semantic(p.directMarkProperties),
+    children: p.children.map((r) =>
+      r.type === "text"
+        ? { ...r, directProperties: semantic(r.directProperties) }
+        : r,
+    ),
+  };
+}
 
 /** Build a style delta from the actual selected runs, without flattening script-specific defaults. */
 export function selectionStyleDelta(

@@ -19,3 +19,8 @@ export type { ListDefinition, ListLevel } from "./lists.js";
 export { changeCase } from "./case.js";
 export { runAtPosition, similarFormatting } from "./selection.js";
 export { pageForParagraph, splitSections, sectionTarget } from "./sections.js";
+export { physicalAlignment } from "./format.js";
+export { columnWidth, fitDrawing } from "./layout.js";
+export { tableContext } from "./tables.js";
+export { parseEquation } from "./equation.js";
+export { shapePaths, iconPaths, iconLibrary } from "../model/graphics.js";

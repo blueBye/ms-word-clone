@@ -18,6 +18,8 @@ import { runProperties } from "./text.js";
 import { mergeRun } from "./format.js";
 import { imageData } from "./assets.js";
 import { validateDrawing } from "./objects.js";
+import { columnWidth, fitDrawing } from "./layout.js";
+import { pageForParagraph } from "./sections.js";
 
 export function editStructure(
   document: DocumentIR,
@@ -28,12 +30,29 @@ export function editStructure(
 ) {
   let found = false,
     selection: { id: string; start: number; end: number } | undefined;
+  let insertionBase: Paragraph | undefined;
   const paragraph = (text = ""): Paragraph => ({
     type: "paragraph",
     id: newId(),
     properties: {},
-    directProperties: {},
-    children: [{ type: "text", text, properties: {}, directProperties: {} }],
+    directProperties: insertionBase
+      ? {
+          styleId: insertionBase.properties.styleId,
+          direction: insertionBase.properties.direction,
+          alignment: insertionBase.properties.alignment,
+        }
+      : {},
+    directMarkProperties: insertionBase?.directMarkProperties,
+    children: [
+      {
+        type: "text",
+        text,
+        properties: {},
+        directProperties:
+          insertionBase?.children.filter((r) => r.type === "text").at(-1)
+            ?.directProperties ?? {},
+      },
+    ],
   });
   const editable = (p: Paragraph) => {
     const allowed = capability(p.id!);
@@ -54,6 +73,7 @@ export function editStructure(
       found = true;
       result = blocks.slice();
       const p = blocks[index] as Paragraph;
+      insertionBase = p;
       if (command.type === "splitParagraph") {
         editable(p);
         const text = paragraphText(p);
@@ -259,8 +279,20 @@ export function editStructure(
         ],
       };
     }
+    const available = columnWidth(
+      pageForParagraph(document, insertionBase?.id),
+    );
     if (insert.type === "insertDrawing")
-      return { ...paragraph(), children: [validateDrawing(insert.drawing)] };
+      return {
+        ...paragraph(),
+        children: [
+          !["page", "margin"].includes(
+            insert.drawing.position?.horizontal.relativeTo ?? "",
+          )
+            ? fitDrawing(validateDrawing(insert.drawing), available)
+            : validateDrawing(insert.drawing),
+        ],
+      };
     if (insert.type === "insertImage") {
       imageData(insert.dataUrl);
       return {
@@ -268,8 +300,10 @@ export function editStructure(
         children: [
           {
             type: "drawing",
-            widthPt: finite(insert.widthPt, 1, 15840),
-            heightPt: finite(insert.heightPt, 1, 15840),
+            widthPt: Math.min(available, finite(insert.widthPt, 1, 15840)),
+            heightPt:
+              finite(insert.heightPt, 1, 15840) *
+              Math.min(1, available / insert.widthPt),
             alt: insert.alt,
             image: { dataUrl: insert.dataUrl },
           },
@@ -291,8 +325,13 @@ export function editStructure(
       throw new Error("Provide one positive width per table column.");
     return {
       type: "table",
-      properties: { width: { unit: "percent", value: 100 } },
-      columnsPt: insert.columnWidthsPt ?? [],
+      properties: {
+        width: { unit: "percent", value: 100 },
+        direction: insertionBase?.properties.direction,
+      },
+      columnsPt:
+        insert.columnWidthsPt ??
+        Array.from({ length: columns }, () => available / columns),
       rows: Array.from({ length: rows }, (_, row) => ({
         header: insert.header && row === 0,
         cells: Array.from({ length: columns }, (_, column) => ({

@@ -206,6 +206,10 @@ export interface DrawingInline {
   image?: {
     dataUrl: string;
     opacity?: number;
+    brightness?: number;
+    contrast?: number;
+    grayscale?: boolean;
+    blurPt?: number;
     crop?: Partial<Record<"left" | "top" | "right" | "bottom", number>>;
   };
   shape?: {
@@ -222,6 +226,7 @@ export interface DrawingInline {
     behindText: boolean;
     zIndex: number;
     wrap: string;
+    locked?: boolean;
   };
 }
 export interface Table {

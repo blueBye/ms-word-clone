@@ -4,8 +4,11 @@ import { parseXml, childElements, descendants } from "./parser/xml.js";
 import { writeTextEffects } from "./text-effects.js";
 import type { RunFormat } from "../core/types.js";
 import { parseEquation, type MathNode } from "../core/equation.js";
+import { iconPaths, vectorCommands } from "../model/graphics.js";
 import { videoUrl } from "../core/assets.js";
 import { OLE_PREVIEW } from "./ole-preview.js";
+import { wordAlignment } from "./alignment.js";
+import { writeImageEffects } from "./image-effects.js";
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main",
   WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
   WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
@@ -50,7 +53,7 @@ function paragraph(parent: Element, p: Paragraph, w: string) {
       pr,
       "jc",
       "val",
-      p.properties.alignment === "justify" ? "both" : p.properties.alignment,
+      wordAlignment(p.properties.alignment, p.properties.direction),
     );
   for (const r of p.children)
     if (r.type === "text") {
@@ -233,7 +236,7 @@ export async function drawingRun(
           simplePos: 0,
           relativeHeight: Math.max(0, pos.zIndex),
           behindDoc: pos.behindText ? 1 : 0,
-          locked: 0,
+          locked: pos.locked ? 1 : 0,
           layoutInCell: 1,
           allowOverlap: 1,
         }
@@ -384,10 +387,7 @@ export async function drawingRun(
         "r:embed",
         await imageRelation(item.image.dataUrl),
       );
-      if (item.image.opacity !== undefined)
-        add(blip, A, "a:alphaModFix", {
-          amt: Math.round(item.image.opacity * 100000),
-        });
+      writeImageEffects(blip, item.image);
       if (item.image.crop)
         add(
           bf,
@@ -437,15 +437,43 @@ export async function drawingRun(
       cx: emu(item.widthPt),
       cy: emu(item.heightPt),
     });
-    add(
-      add(pr, A, "a:prstGeom", {
-        prst: /^[a-zA-Z][a-zA-Z0-9]*$/.test(item.shape?.kind ?? "rect")
-          ? (item.shape?.kind ?? "rect")
-          : "rect",
-      }),
-      A,
-      "a:avLst",
-    );
+    const iconPath = iconPaths[item.shape?.kind ?? ""];
+    if (iconPath) {
+      const geometry = add(pr, A, "a:custGeom");
+      add(add(geometry, A, "a:avLst"), A, "a:gd", {
+        name: `docx_${item.shape!.kind}`,
+        fmla: "val 0",
+      });
+      add(geometry, A, "a:gdLst");
+      add(geometry, A, "a:ahLst");
+      add(geometry, A, "a:cxnLst");
+      add(geometry, A, "a:rect", { l: 0, t: 0, r: 100, b: 100 });
+      const path = add(add(geometry, A, "a:pathLst"), A, "a:path", {
+        w: 100,
+        h: 100,
+      });
+      for (const command of vectorCommands(iconPath)) {
+        const node = add(
+          path,
+          A,
+          `a:${{ M: "moveTo", L: "lnTo", C: "cubicBezTo", Q: "quadBezTo", Z: "close" }[command.kind]}`,
+        );
+        for (let i = 0; i < command.points.length; i += 2)
+          add(node, A, "a:pt", {
+            x: command.points[i],
+            y: command.points[i + 1],
+          });
+      }
+    } else
+      add(
+        add(pr, A, "a:prstGeom", {
+          prst: /^[a-zA-Z][a-zA-Z0-9]*$/.test(item.shape?.kind ?? "rect")
+            ? (item.shape?.kind ?? "rect")
+            : "rect",
+        }),
+        A,
+        "a:avLst",
+      );
     if (!item.image) fill(pr, item.shape?.fill);
     const line = add(pr, A, "a:ln", { w: emu(item.shape?.strokeWidthPt ?? 1) });
     fill(line, item.shape?.stroke);
@@ -504,15 +532,78 @@ export function updateDrawing(root: Element, d: DrawingInline) {
     ext?.setAttribute("cx", String(emu(d.widthPt)));
     ext?.setAttribute("cy", String(emu(d.heightPt)));
   }
+  if (d.shape) {
+    const pr = descendants(frame, "spPr")[0];
+    const replaceFill = (parent: Element, color?: string) => {
+      for (const node of childElements(parent).filter((e) =>
+        [
+          "solidFill",
+          "noFill",
+          "gradFill",
+          "blipFill",
+          "pattFill",
+          "grpFill",
+        ].includes(e.localName ?? ""),
+      ))
+        parent.removeChild(node);
+      fill(parent, color);
+      const node = childElements(parent).at(-1)!,
+        before = childElements(parent).find((e) =>
+          [
+            "ln",
+            "effectLst",
+            "effectDag",
+            "scene3d",
+            "sp3d",
+            "extLst",
+            "prstDash",
+            "custDash",
+            "round",
+            "bevel",
+            "miter",
+            "headEnd",
+            "tailEnd",
+          ].includes(e.localName ?? ""),
+        );
+      if (before && before !== node) parent.insertBefore(node, before);
+    };
+    if (pr) {
+      if (!d.image) replaceFill(pr, d.shape.fill);
+      let line = childElements(pr).find((e) => e.localName === "ln");
+      if (!line) {
+        line = add(pr, A, "a:ln");
+        const before = childElements(pr).find((e) =>
+          ["effectLst", "effectDag", "scene3d", "sp3d", "extLst"].includes(
+            e.localName ?? "",
+          ),
+        );
+        if (before) pr.insertBefore(line, before);
+      }
+      line.setAttribute("w", String(emu(d.shape.strokeWidthPt ?? 1)));
+      replaceFill(line, d.shape.stroke);
+    }
+  }
   const image = descendants(frame, "blip")[0];
-  if (image && d.image?.opacity !== undefined) {
-    for (const child of childElements(image).filter(
-      (e) => e.localName === "alphaModFix",
-    ))
-      image.removeChild(child);
-    add(image, A, "a:alphaModFix", {
-      amt: Math.round(d.image.opacity * 100000),
-    });
+  if (image && d.image) {
+    writeImageEffects(image, d.image);
+    if (d.image.crop) {
+      const fill = image.parentNode as Element;
+      let rect = childElements(fill).find((c) => c.localName === "srcRect");
+      if (!rect) {
+        rect = fill.ownerDocument!.createElementNS(A, "a:srcRect");
+        fill.insertBefore(rect, image.nextSibling);
+      }
+      for (const [key, side] of [
+        ["l", "left"],
+        ["t", "top"],
+        ["r", "right"],
+        ["b", "bottom"],
+      ] as const)
+        rect.setAttribute(
+          key,
+          String(Math.round((d.image.crop[side] ?? 0) * 100000)),
+        );
+    }
   }
   if (d.position) {
     frame.setAttribute(

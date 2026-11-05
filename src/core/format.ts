@@ -1,4 +1,15 @@
 import type { ParagraphProperties, RunProperties } from "../model/document.js";
+export function physicalAlignment(
+  properties: ParagraphProperties,
+): ParagraphProperties {
+  const a = properties.alignment;
+  if (a !== "start" && a !== "end") return properties;
+  return {
+    ...properties,
+    alignment:
+      (a === "start") === (properties.direction !== "rtl") ? "left" : "right",
+  };
+}
 export function defined<T extends object>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, v]) => v !== undefined),

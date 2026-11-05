@@ -9,7 +9,12 @@ import type {
   Paragraph,
   ParagraphFormat,
 } from "@local/docx-ir-engine/core";
-import { rulerChange, type RulerHandle } from "../../lib/ruler";
+import {
+  rulerChange,
+  snapRuler,
+  RULER_STEP_PT,
+  type RulerHandle,
+} from "../../lib/ruler";
 
 export function ParagraphRuler({
   document,
@@ -103,7 +108,13 @@ export function ParagraphRuler({
         : rtl
           ? width - right - point
           : point - left;
-    return rulerChange(handle, value, start, first, content);
+    return rulerChange(
+      handle,
+      event.altKey ? value : snapRuler(value),
+      start,
+      first,
+      content,
+    );
   };
   return (
     <div
@@ -121,15 +132,18 @@ export function ParagraphRuler({
         className="ruler-margin ruler-margin-right"
         style={{ width: `${(right / width) * 100}%` }}
       />
-      {Array.from({ length: Math.floor(content / 36) + 1 }, (_, i) => (
-        <span
-          className={`ruler-tick ${i % 2 ? "minor" : ""}`}
-          key={i}
-          style={{ left: `${(physical(i * 36) / width) * 100}%` }}
-        >
-          {i % 2 ? "" : i / 2}
-        </span>
-      ))}
+      {Array.from(
+        { length: Math.floor(content / RULER_STEP_PT) + 1 },
+        (_, i) => (
+          <span
+            className={`ruler-tick ${i % 16 === 0 ? "major" : i % 8 === 0 ? "half" : i % 4 === 0 ? "quarter" : "minor"}`}
+            key={i}
+            style={{ left: `${(physical(i * RULER_STEP_PT) / width) * 100}%` }}
+          >
+            {i % 16 ? "" : i / 16}
+          </span>
+        ),
+      )}
       {(
         [
           [
@@ -176,7 +190,7 @@ export function ParagraphRuler({
             const delta =
               (e.key === "ArrowRight" ? 1 : -1) *
               (rtl ? -1 : 1) *
-              (e.shiftKey ? 6 : 0.5);
+              (e.altKey ? 0.5 : e.shiftKey ? 36 : RULER_STEP_PT);
             const value =
               handle === "first"
                 ? start + first
@@ -186,7 +200,9 @@ export function ParagraphRuler({
             onChange(
               rulerChange(
                 handle,
-                value + (handle === "end" ? -delta : delta),
+                e.altKey
+                  ? value + (handle === "end" ? -delta : delta)
+                  : snapRuler(value + (handle === "end" ? -delta : delta)),
                 start,
                 first,
                 content,

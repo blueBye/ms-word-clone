@@ -10,6 +10,11 @@ import {
   similarFormatting,
   pageForParagraph,
   sectionTarget,
+  physicalAlignment,
+  tableContext,
+  getParagraphs,
+  columnWidth,
+  type DrawingInline,
 } from "@local/docx-ir-engine/core";
 import {
   openDocxSession,
@@ -34,7 +39,16 @@ import {
   type SearchDirection,
 } from "../lib/search";
 import { useSearchHighlights } from "./editor/useSearchHighlights";
+import { useCommentHighlight } from "./editor/useCommentHighlight";
 import { Ribbon, type RibbonTab } from "./editor/Ribbon";
+import { ContextRibbon, type ContextTab } from "./editor/ContextRibbon";
+import {
+  ObjectFormatDialog,
+  TableFormatDialog,
+} from "./editor/ObjectFormatDialog";
+import { ObjectSelectionOverlay } from "./editor/ObjectSelectionOverlay";
+import { IconsDialog } from "./editor/GraphicsGallery";
+import { SymbolDialog } from "./editor/SymbolDialog";
 import { Tool } from "./editor/Controls";
 import { Icon } from "./editor/Icon";
 import { FontPanel, useDocumentFonts } from "./editor/FontPanel";
@@ -94,7 +108,7 @@ export function DocxWorkspace() {
   const [filename, setFilename] = useState("Sample document.docx"),
     [busy, setBusy] = useState(true),
     [error, setError] = useState("");
-  const [tab, setTab] = useState<RibbonTab>("Home"),
+  const [tab, setTab] = useState<RibbonTab | ContextTab>("Home"),
     [pane, setPane] = useState<Pane>(null),
     [modal, setModal] = useState<EditorModal>(null);
   const [fileView, setFileView] = useState<string | null>(null),
@@ -153,13 +167,55 @@ export function DocxWorkspace() {
     canvas = useRef<HTMLDivElement>(null),
     textInput = useRef<HTMLTextAreaElement>(null);
   const pictureInput = useRef<HTMLInputElement>(null);
+  const pictureReplace = useRef<ObjectRef | null>(null);
+  const equationDraft = useRef<(() => Promise<boolean>) | null>(null);
+  const [objectFormat, setObjectFormat] = useState<string | null>(null),
+    [tableFormat, setTableFormat] = useState<
+      "properties" | "split" | "deleteCells" | null
+    >(null),
+    [equationSnippet, setEquationSnippet] = useState({ text: "", serial: 0 });
+  const [hoveredComment, setHoveredComment] = useState<{
+    id: string;
+    start: number;
+    end: number;
+  } | null>(null);
+  useCommentHighlight(canvas, hoveredComment);
   const textFileInput = useRef<HTMLInputElement>(null);
   const request = useRef(0),
     changing = useRef(false),
     activeSession = useRef<DocxSession | null>(null);
-  const all = useMemo(() => paragraphs(document), [document]),
-    selected = all.find((p) => p.id === selectedId);
+  const all = useMemo(() => paragraphs(document), [document]);
+  const selected = useMemo(() => {
+    const p = all.find((p) => p.id === selectedId);
+    return p
+      ? { ...p, properties: physicalAlignment(p.properties) }
+      : undefined;
+  }, [all, selectedId]);
   const objects = documentObjects(all);
+  const pickedObject = objects.find((o) =>
+    selectedObjects.some((ref) => ref.id === o.id && ref.index === o.index),
+  );
+  const pickedTable = useMemo(
+    () => (document ? tableContext(document, selectedId) : undefined),
+    [document, selectedId],
+  );
+  const contextualTabs: ContextTab[] = pickedObject?.drawing.equation
+    ? ["Equation"]
+    : pickedObject?.drawing.image &&
+        !pickedObject.drawing.attachment &&
+        !pickedObject.drawing.video
+      ? ["Picture Format"]
+      : pickedObject?.drawing.shape || pickedObject?.drawing.children
+        ? ["Shape Format"]
+        : [];
+  if (pickedTable) contextualTabs.push("Table Design", "Table Layout");
+  const ribbonTabs: (RibbonTab | ContextTab)[] = [
+    "Home",
+    "Insert",
+    "Layout",
+    ...contextualTabs,
+  ];
+  const shownTab = ribbonTabs.includes(tab) ? tab : "Home";
   const activeDocument = useMemo(() => {
     if (!document) return null;
     const target = sectionTarget(document, selectedId);
@@ -283,6 +339,13 @@ export function DocxWorkspace() {
       setPane(null);
       setScope([]);
       setPainter(null);
+      setSelectedObjects([]);
+      setObjectFormat(null);
+      setTableFormat(null);
+      setAuthoring(null);
+      setAssetDialog(null);
+      pictureReplace.current = null;
+      equationDraft.current = null;
       setHomeDialog(null);
       setActiveHit(null);
       setNotice(
@@ -498,6 +561,7 @@ export function DocxWorkspace() {
           "insertBreak",
           "sectionBreak",
           "insertTable",
+          "table",
         ].includes(command.type)
           ? active.selection
           : undefined,
@@ -544,6 +608,7 @@ export function DocxWorkspace() {
             "insertField",
             "insertBreak",
             "sectionBreak",
+            "table",
           ].includes(c.type),
         )
           ? active.selection
@@ -587,6 +652,8 @@ export function DocxWorkspace() {
     }
   }
   async function save() {
+    if (changing.current) return;
+    if (equationDraft.current && !(await equationDraft.current())) return;
     const active = activeSession.current;
     if (!active || changing.current) return;
     changing.current = true;
@@ -855,6 +922,7 @@ export function DocxWorkspace() {
       const before = activeSession.current?.document;
       const done = await execute({
         type: "updateStyleFromSelection",
+        normalizeParagraph: true,
         styleId: id,
         ...picked,
       });
@@ -876,6 +944,135 @@ export function DocxWorkspace() {
       await execute({ type: "style", styleId: id, gallery: false });
   }
   async function action(name: string) {
+    if (name.startsWith("shape:")) {
+      const kind = name.slice(6);
+      await insertGraphic({
+        type: "drawing",
+        widthPt: kind === "line" ? 144 : 108,
+        heightPt: kind === "line" ? 2 : 72,
+        alt: kind,
+        shape: {
+          kind,
+          fill: kind === "line" ? undefined : "#4472C4",
+          stroke: "#2F528F",
+          strokeWidthPt: 1,
+        },
+      });
+      return;
+    }
+    if (name.startsWith("equation:")) {
+      if (name === "equation:new") {
+        const previous = new Set(objects.map((o) => `${o.id}-${o.index}`));
+        if (
+          await execute({
+            type: "insertDrawing",
+            id: selectedId || undefined,
+            drawing: {
+              type: "drawing",
+              widthPt: 120,
+              heightPt: 36,
+              alt: "Equation",
+              equation: { expression: "x" },
+            },
+          })
+        ) {
+          const o = documentObjects(
+            paragraphs(activeSession.current!.document),
+          ).find(
+            (o) => o.drawing.equation && !previous.has(`${o.id}-${o.index}`),
+          );
+          if (o) {
+            setSelectedObjects([{ id: o.id, index: o.index }]);
+            setSelectedId(o.id);
+            setTab("Equation");
+            setEquationSnippet((p) => ({
+              text: "__focus__",
+              serial: p.serial + 1,
+            }));
+          }
+        }
+        return;
+      }
+      setEquationSnippet((p) => ({
+        text: name === "equation:focus" ? "__focus__" : name.slice(16),
+        serial: p.serial + 1,
+      }));
+      return;
+    }
+    if (name === "picture:replace") {
+      pictureReplace.current = pickedObject
+        ? { id: pickedObject.id, index: pickedObject.index }
+        : null;
+      pictureInput.current?.click();
+      return;
+    }
+    if (name === "picture:options" || name === "picture:crop") {
+      setObjectFormat(name.endsWith("crop") ? "Crop" : "Size");
+      return;
+    }
+    if (name.startsWith("table:") && pickedTable && !/^table:\d/.test(name)) {
+      const operation = name.slice(6);
+      if (
+        operation === "properties" ||
+        operation === "split" ||
+        operation === "deleteCells"
+      ) {
+        setTableFormat(operation);
+        return;
+      }
+      if (operation.startsWith("select:")) {
+        const what = operation.slice(7),
+          rows = pickedTable.table.rows;
+        const cells = rows.flatMap((r, i) =>
+          r.cells.filter(
+            (c) =>
+              !c.continuation &&
+              (what === "table" ||
+                (what === "row" && i === pickedTable.row) ||
+                (what === "column" &&
+                  c.column <= pickedTable.cell.column &&
+                  c.column + c.columnSpan > pickedTable.cell.column) ||
+                (what === "cell" && c === pickedTable.cell)),
+          ),
+        );
+        const selected = cells
+          .flatMap((c) => getParagraphs(c.blocks))
+          .map((p) => ({ id: p.id!, start: 0, end: paragraphText(p).length }));
+        setScope(selected);
+        return;
+      }
+      if (operation.startsWith("align:")) {
+        const [, verticalAlign, alignment] = operation.split(":");
+        const command = makeTableCommand({
+          format: {
+            verticalAlign: verticalAlign as "top" | "center" | "bottom",
+          },
+        });
+        const r = command.range!;
+        await executeMany([
+          command,
+          ...pickedTable.table.rows.flatMap((row, i) =>
+            i >= r.top && i <= r.bottom
+              ? row.cells
+                  .filter((c) => c.column >= r.left && c.column <= r.right)
+                  .flatMap((c) => getParagraphs(c.blocks))
+                  .map((p) => ({
+                    type: "paragraph" as const,
+                    id: p.id!,
+                    format: {
+                      alignment: alignment as "left" | "center" | "right",
+                    },
+                  }))
+              : [],
+          ),
+        ]);
+        return;
+      }
+      await tableCommand({
+        action: operation as Extract<EditCommand, { type: "table" }>["action"],
+      });
+      return;
+    }
     if (name === "textFromFile") {
       textFileInput.current?.click();
       return;
@@ -902,8 +1099,13 @@ export function DocxWorkspace() {
         selectedObjects.some((ref) => ref.id === o.id && ref.index === o.index),
       )?.drawing;
       if (d?.chart) setAuthoring("chart");
-      else if (d?.equation) setAuthoring("equation");
-      else if (d?.spreadsheet) setAssetDialog("spreadsheet");
+      else if (d?.equation) {
+        setTab("Equation");
+        setEquationSnippet((p) => ({
+          text: "__focus__",
+          serial: p.serial + 1,
+        }));
+      } else if (d?.spreadsheet) setAssetDialog("spreadsheet");
       return;
     }
     if (name.startsWith("asset:")) {
@@ -954,10 +1156,9 @@ export function DocxWorkspace() {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         canvas.getContext("2d")!.drawImage(video, 0, 0);
-        const available =
-            (activeDocument?.page?.widthPt ?? 595.3) -
-            (activeDocument?.page?.margins?.left ?? 72) -
-            (activeDocument?.page?.margins?.right ?? 72),
+        const available = columnWidth(
+            activeDocument ? pageForParagraph(activeDocument, selectedId) : {},
+          ),
           scale = Math.min(0.75, available / canvas.width);
         await execute({
           type: "insertImage",
@@ -989,7 +1190,8 @@ export function DocxWorkspace() {
       return;
     }
     if (name === "object:options") {
-      setPane("objects");
+      if (pickedObject) setObjectFormat("Position");
+      else setPane("objects");
       return;
     }
     if (name.startsWith("object:")) {
@@ -1000,8 +1202,12 @@ export function DocxWorkspace() {
           action: name.slice(7),
         })
       ) {
-        if (["object:group", "object:ungroup", "object:delete"].includes(name))
+        if (
+          ["object:group", "object:ungroup", "object:delete"].includes(name)
+        ) {
           setSelectedObjects([]);
+          if (canvas.current) delete canvas.current.dataset.objectSelection;
+        }
       }
       return;
     }
@@ -1381,7 +1587,7 @@ export function DocxWorkspace() {
     return message;
   }
   function capturePageSelection() {
-    if (!canvas.current) return;
+    if (!canvas.current || canvas.current.dataset.objectSelection) return;
     const picked = selectionRanges(canvas.current, document);
     setScope(picked.length > 1 ? picked : []);
     editor.capture(true);
@@ -1402,6 +1608,90 @@ export function DocxWorkspace() {
       );
       setPainter(null);
     }
+  }
+  function makeTableCommand(
+    patch: Omit<Extract<EditCommand, { type: "table" }>, "type" | "id">,
+  ): Extract<EditCommand, { type: "table" }> {
+    const context = pickedTable!;
+    const selected = scope
+      .map((s) => document && tableContext(document, s.id))
+      .filter(
+        (c): c is NonNullable<typeof c> => !!c && c.table === context.table,
+      );
+    const range =
+      patch.range ??
+      (selected.length
+        ? {
+            top: Math.min(...selected.map((c) => c.row)),
+            bottom: Math.max(
+              ...selected.map((c) => c.row + c.cell.rowSpan - 1),
+            ),
+            left: Math.min(...selected.map((c) => c.cell.column)),
+            right: Math.max(
+              ...selected.map((c) => c.cell.column + c.cell.columnSpan - 1),
+            ),
+          }
+        : {
+            top: context.row,
+            bottom: context.row + context.cell.rowSpan - 1,
+            left: context.cell.column,
+            right: context.cell.column + context.cell.columnSpan - 1,
+          });
+    if (
+      !scope.length &&
+      ["distributeRows", "distributeColumns"].includes(patch.action ?? "")
+    ) {
+      range.top = 0;
+      range.bottom = context.table.rows.length - 1;
+      range.left = 0;
+      range.right =
+        Math.max(
+          context.table.columnsPt.length,
+          ...context.table.rows.flatMap((r) =>
+            r.cells.map((c) => c.column + c.columnSpan),
+          ),
+        ) - 1;
+    }
+    return { type: "table", id: selectedId, ...patch, range };
+  }
+  async function tableCommand(
+    patch: Omit<Extract<EditCommand, { type: "table" }>, "type" | "id">,
+  ) {
+    return pickedTable ? execute(makeTableCommand(patch)) : false;
+  }
+  async function changeObject(
+    drawing: import("@local/docx-ir-engine/core").DrawingInline,
+  ) {
+    return pickedObject
+      ? execute({
+          type: "drawing",
+          id: pickedObject.id,
+          index: pickedObject.index,
+          drawing,
+        })
+      : false;
+  }
+  async function insertGraphic(drawing: DrawingInline) {
+    const previous = new Set(objects.map((o) => `${o.id}-${o.index}`));
+    if (
+      !(await execute({
+        type: "insertDrawing",
+        id: selectedId || undefined,
+        drawing,
+      }))
+    )
+      return false;
+    const o = documentObjects(paragraphs(activeSession.current!.document)).find(
+      (o) => !previous.has(`${o.id}-${o.index}`),
+    );
+    if (o) {
+      setSelectedObjects([{ id: o.id, index: o.index }]);
+      setSelectedId(o.id);
+      setScope([]);
+      if (canvas.current) canvas.current.dataset.objectSelection = "true";
+      setTab(o.drawing.image ? "Picture Format" : "Shape Format");
+    }
+    return true;
   }
   async function editStory(
     kind: "header" | "footer",
@@ -1569,24 +1859,30 @@ export function DocxWorkspace() {
           File
         </button>
         <div role="tablist" aria-label="Ribbon tabs">
-          {(["Home", "Insert", "Layout"] as RibbonTab[]).map((name, index) => (
+          {ribbonTabs.map((name, index) => (
             <button
-              id={`tab-${name}`}
+              id={`tab-${name.replaceAll(" ", "-")}`}
               key={name}
               role="tab"
-              aria-selected={tab === name}
-              aria-controls={`ribbon-${name}`}
-              tabIndex={tab === name ? 0 : -1}
-              className={tab === name ? "selected-tab" : ""}
+              aria-selected={shownTab === name}
+              aria-controls={`ribbon-${name.replaceAll(" ", "-")}`}
+              tabIndex={shownTab === name ? 0 : -1}
+              className={`${shownTab === name ? "selected-tab" : ""} ${contextualTabs.includes(name as ContextTab) ? "context-tab" : ""}`}
               onClick={() => setTab(name)}
               onKeyDown={(e) => {
                 if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
                   e.preventDefault();
-                  const names: RibbonTab[] = ["Home", "Insert", "Layout"],
+                  const names = ribbonTabs,
                     next =
-                      names[(index + (e.key === "ArrowRight" ? 1 : 2)) % 3];
+                      names[
+                        (index +
+                          (e.key === "ArrowRight" ? 1 : names.length - 1)) %
+                          names.length
+                      ];
                   setTab(next);
-                  window.document.getElementById(`tab-${next}`)?.focus();
+                  window.document
+                    .getElementById(`tab-${next.replaceAll(" ", "-")}`)
+                    ?.focus();
                 }
               }}
             >
@@ -1606,7 +1902,7 @@ export function DocxWorkspace() {
           </button>
         </div>
       </nav>
-      {tab === "Home" ? (
+      {shownTab === "Home" ? (
         <HomeRibbon
           selected={selected}
           format={activeRun()}
@@ -1630,6 +1926,16 @@ export function DocxWorkspace() {
           openMenu={homeDialog}
           onDismissMenu={() => setHomeDialog(null)}
         />
+      ) : contextualTabs.includes(shownTab as ContextTab) ? (
+        <ContextRibbon
+          tab={shownTab as ContextTab}
+          object={pickedObject?.drawing}
+          table={pickedTable}
+          disabled={busy || !!session?.lockedReason}
+          onDrawing={(d) => void changeObject(d)}
+          onTable={(p) => void tableCommand(p)}
+          onAction={(name) => void action(name)}
+        />
       ) : (
         <Ribbon
           objectCount={selectedObjects.length}
@@ -1639,7 +1945,7 @@ export function DocxWorkspace() {
                 (ref) => ref.id === o.id && ref.index === o.index,
               ) && !!o.drawing.children,
           )}
-          tab={tab}
+          tab={shownTab as RibbonTab}
           document={activeDocument}
           selected={selected}
           range={range}
@@ -1696,13 +2002,14 @@ export function DocxWorkspace() {
           ref={canvas}
           className={`page-workspace ${painter ? "format-painter-active" : ""}`}
           data-editing-story={editingStory ?? undefined}
+          data-object-selection={selectedObjects.length ? "true" : undefined}
           aria-label="Document pages"
           aria-busy={busy}
           tabIndex={-1}
           onKeyDownCapture={(event) => {
             if (!selectedObjects.length) return;
             const input = event.target as HTMLElement;
-            if (input !== canvas.current) return;
+            if (input.closest("input,textarea,button,select")) return;
             if (["Delete", "Backspace"].includes(event.key)) {
               event.preventDefault();
               event.stopPropagation();
@@ -1729,20 +2036,53 @@ export function DocxWorkspace() {
               object = target.closest<HTMLElement>(
                 "[data-drawing-owner][data-drawing-index]",
               );
+            if (target.closest("[data-editor-overlay]")) return;
             if (
               !object ||
               object.contains(target.closest("[data-paragraph-id]")) ||
               target.closest("a[download]")
             ) {
+              if (equationDraft.current) void equationDraft.current();
               setSelectedObjects([]);
+              if (canvas.current) delete canvas.current.dataset.objectSelection;
+              const cell = target.closest<HTMLElement>("td");
+              const p =
+                cell &&
+                (target.closest<HTMLElement>("[data-paragraph-id]") ??
+                  cell.querySelector<HTMLElement>("[data-paragraph-id]"));
+              if (p?.dataset.paragraphId) {
+                setSelectedId(p.dataset.paragraphId);
+                if (!pickedTable) setTab("Table Layout");
+              }
               return;
             }
             event.preventDefault();
+            if (canvas.current) canvas.current.dataset.objectSelection = "true";
             canvas.current?.focus({ preventScroll: true });
             const ref = {
               id: object.dataset.drawingOwner!,
               index: Number(object.dataset.drawingIndex),
             };
+            setSelectedId(ref.id);
+            setDraft(
+              all.find((p) => p.id === ref.id)
+                ? paragraphText(all.find((p) => p.id === ref.id)!)
+                : "",
+            );
+            setScope([]);
+            const drawing = objects.find(
+              (o) => o.id === ref.id && o.index === ref.index,
+            )?.drawing;
+            if (drawing?.equation) {
+              setTab("Equation");
+              setEquationSnippet((p) => ({
+                text: "__focus__",
+                serial: p.serial + 1,
+              }));
+            } else if (drawing?.image && !drawing.attachment && !drawing.video)
+              setTab("Picture Format");
+            else if (drawing?.shape || drawing?.children)
+              setTab("Shape Format");
             setSelectedObjects((previous) =>
               event.ctrlKey || event.metaKey
                 ? previous.some((o) => o.id === ref.id && o.index === ref.index)
@@ -1777,8 +2117,13 @@ export function DocxWorkspace() {
                   },
                 ]);
                 if (d.chart) setAuthoring("chart");
-                else if (d.equation) setAuthoring("equation");
-                else setAssetDialog("spreadsheet");
+                else if (d.equation) {
+                  setTab("Equation");
+                  setEquationSnippet((p) => ({
+                    text: "__focus__",
+                    serial: p.serial + 1,
+                  }));
+                } else setAssetDialog("spreadsheet");
                 return;
               }
             }
@@ -1856,6 +2201,16 @@ export function DocxWorkspace() {
               </button>
             </div>
           )}
+          {selectedObjects.length === 1 && pickedObject && (
+            <ObjectSelectionOverlay
+              pendingDraft={equationDraft}
+              container={canvas}
+              object={pickedObject}
+              onChange={changeObject}
+              onAction={(name) => void action(name)}
+              snippet={equationSnippet}
+            />
+          )}
         </main>
         {pane && (
           <aside
@@ -1895,7 +2250,27 @@ export function DocxWorkspace() {
               {pane === "comments" &&
                 all.flatMap((p) =>
                   (p.comments ?? []).map((c) => (
-                    <article className="comment-card" key={`${p.id}-${c.key}`}>
+                    <article
+                      className="comment-card"
+                      key={`${p.id}-${c.key}`}
+                      tabIndex={0}
+                      onMouseEnter={() =>
+                        setHoveredComment({
+                          id: p.id!,
+                          start: c.start,
+                          end: c.end,
+                        })
+                      }
+                      onMouseLeave={() => setHoveredComment(null)}
+                      onFocus={() =>
+                        setHoveredComment({
+                          id: p.id!,
+                          start: c.start,
+                          end: c.end,
+                        })
+                      }
+                      onBlur={() => setHoveredComment(null)}
+                    >
                       <b>{c.author}</b>
                       <small>{new Date(c.date).toLocaleString()}</small>
                       <textarea
@@ -2271,10 +2646,9 @@ export function DocxWorkspace() {
             if (file.size > 20_000_000)
               throw new Error("Choose an image smaller than 20 MB.");
             const bitmap = await createImageBitmap(file),
-              available =
-                (document?.page?.widthPt ?? 595.3) -
-                (document?.page?.margins?.left ?? 72) -
-                (document?.page?.margins?.right ?? 72);
+              available = columnWidth(
+                document ? pageForParagraph(document, selectedId) : {},
+              );
             const scale = Math.min(0.75, available / bitmap.width),
               widthPt = bitmap.width * scale,
               heightPt = bitmap.height * scale;
@@ -2286,6 +2660,24 @@ export function DocxWorkspace() {
                 reject(new Error("Could not read the image."));
               reader.readAsDataURL(file);
             });
+            const replace = pictureReplace.current;
+            pictureReplace.current = null;
+            if (replace) {
+              const original = documentObjects(
+                paragraphs(activeSession.current!.document),
+              ).find((o) => o.id === replace.id && o.index === replace.index);
+              if (original?.drawing.image)
+                await execute({
+                  type: "drawing",
+                  ...replace,
+                  drawing: {
+                    ...original.drawing,
+                    alt: file.name,
+                    image: { ...original.drawing.image, dataUrl },
+                  },
+                });
+              return;
+            }
             if (
               await execute({
                 type: "insertImage",
@@ -2418,6 +2810,22 @@ export function DocxWorkspace() {
         canPage={!!session?.canSetPage}
         execute={execute}
       />
+      {objectFormat && pickedObject && (
+        <ObjectFormatDialog
+          drawing={pickedObject.drawing}
+          initialTab={objectFormat}
+          onApply={changeObject}
+          onClose={() => setObjectFormat(null)}
+        />
+      )}
+      {tableFormat && pickedTable && (
+        <TableFormatDialog
+          context={pickedTable}
+          mode={tableFormat}
+          onApply={tableCommand}
+          onClose={() => setTableFormat(null)}
+        />
+      )}
       {assetDialog && (
         <AssetDialog
           mode={assetDialog}
@@ -2431,7 +2839,57 @@ export function DocxWorkspace() {
           onClose={() => setAssetDialog(null)}
         />
       )}
-      {authoring && document && (
+      {authoring === "icons" && (
+        <IconsDialog
+          onClose={() => setAuthoring(null)}
+          onInsert={async (ids) => {
+            const commands: EditCommand[] = ids.map((id) => ({
+              type: "insertDrawing",
+              id: selectedId || undefined,
+              drawing: {
+                type: "drawing",
+                widthPt: 54,
+                heightPt: 54,
+                alt: id,
+                shape: {
+                  kind: `icon_${id}`,
+                  fill: "#000000",
+                  strokeWidthPt: 0,
+                },
+              },
+            }));
+            return executeMany(commands);
+          }}
+        />
+      )}
+      {authoring === "symbols" && (
+        <SymbolDialog
+          families={fonts.required.map((f) => f.family)}
+          onClose={() => setAuthoring(null)}
+          onInsert={async (text, font) => {
+            if (!selected) return false;
+            const picked = editor.getSelection() ?? {
+              id: selectedId,
+              start: range?.start ?? 0,
+              end: range?.end ?? 0,
+            };
+            const done = await execute({
+              type: "text",
+              ...picked,
+              text,
+              format: { fontFamily: font, complexScriptFont: font },
+            });
+            if (done)
+              editor.select({
+                id: picked.id,
+                start: picked.start + text.length,
+                end: picked.start + text.length,
+              });
+            return done;
+          }}
+        />
+      )}
+      {authoring && !["icons", "symbols"].includes(authoring) && document && (
         <AuthoringDialog
           mode={authoring}
           object={objects.find((o) =>

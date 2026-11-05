@@ -14,6 +14,73 @@ export function RibbonIcon({
   const blue = "#4479aa",
     gold = "#bd934f";
   const art: Record<string, ReactNode> = {
+    corrections: (
+      <>
+        <circle cx="12" cy="12" r="5" fill="#f4d47b" stroke="#b68d32" />
+        <path
+          d="M12 1v4M12 19v4M1 12h4M19 12h4M4 4l3 3M17 17l3 3M4 20l3-3M17 7l3-3"
+          stroke="#b68d32"
+        />
+      </>
+    ),
+    transparency: (
+      <>
+        <path d="M3 3h18v18H3z" fill="#dde7f3" stroke="#738699" />
+        <path
+          d="M3 3h6v6H3zM15 3h6v6h-6zM9 9h6v6H9zM3 15h6v6H3zM15 15h6v6h-6z"
+          fill="#8fa9c9"
+        />
+      </>
+    ),
+    crop: (
+      <>
+        <path d="M6 1v17h17M1 6h17v17" stroke="#444" strokeWidth="2" />
+        <path d="M8 8h8v8H8z" stroke={blue} />
+      </>
+    ),
+    mergeCells: (
+      <>
+        <path
+          d="M2 4h20v16H2zM2 9h6M16 9h6M2 15h6M16 15h6M8 4v4M16 4v4M8 17v3M16 17v3"
+          stroke="#738699"
+        />
+        <path d="M4 12h6M8 10l2 2-2 2M20 12h-6M16 10l-2 2 2 2" stroke={blue} />
+      </>
+    ),
+    splitCells: (
+      <>
+        <path d="M2 4h20v16H2zM8 4v16M16 4v16M2 12h20" stroke="#738699" />
+        <path d="M8 4v16M16 4v16" stroke={blue} strokeWidth="2" />
+      </>
+    ),
+    insertAbove: (
+      <>
+        <path d="M3 10h18v12H3zM3 16h18M9 10v12M15 10v12" stroke="#738699" />
+        <path d="M3 3h18v4H3z" fill="#cde4c1" stroke="#719265" />
+        <path d="M12 1v8M8 5h8" stroke="#5c8d47" />
+      </>
+    ),
+    insertBelow: (
+      <>
+        <path d="M3 2h18v12H3zM3 8h18M9 2v12M15 2v12" stroke="#738699" />
+        <path d="M3 17h18v4H3z" fill="#cde4c1" stroke="#719265" />
+        <path d="M12 15v8M8 19h8" stroke="#5c8d47" />
+      </>
+    ),
+    insertLeft: (
+      <>
+        <path d="M10 3h12v18H10zM16 3v18M10 9h12M10 15h12" stroke="#738699" />
+        <path d="M3 3h4v18H3z" fill="#cde4c1" stroke="#719265" />
+        <path d="M1 12h8M5 8v8" stroke="#5c8d47" />
+      </>
+    ),
+    insertRight: (
+      <>
+        <path d="M2 3h12v18H2zM8 3v18M2 9h12M2 15h12" stroke="#738699" />
+        <path d="M17 3h4v18h-4z" fill="#cde4c1" stroke="#719265" />
+        <path d="M15 12h8M19 8v8" stroke="#5c8d47" />
+      </>
+    ),
     cover: (
       <>
         {page}

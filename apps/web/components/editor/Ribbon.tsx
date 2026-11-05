@@ -13,6 +13,7 @@ import {
 } from "./RibbonControls";
 import { RibbonIcon } from "./RibbonIcon";
 import { ArrangeControls } from "./ArrangeControls";
+import { ShapesGallery } from "./GraphicsGallery";
 
 export type RibbonTab = "Home" | "Insert" | "Layout";
 export interface RibbonProps {
@@ -188,7 +189,14 @@ export function Ribbon({
           </Group>
           <Group label="Illustrations">
             {command("Pictures", "picture", true, "picture")}
-            {command("Shapes", "shapes", true, "dialog:shapes")}
+            <Dropdown
+              label="Shapes"
+              icon="shapes"
+              large
+              disabled={disabled || !document}
+            >
+              <ShapesGallery onPick={(kind) => onAction(`shape:${kind}`)} />
+            </Dropdown>
             {command("Icons", "icons", true, "dialog:icons")}
             {command("3D Models", "model", true, "asset:model3d")}
             {command("SmartArt", "smartArt", true, "dialog:smartArt")}
@@ -290,7 +298,7 @@ export function Ribbon({
           </Group>
           <Group label="Symbols">
             <div className="office-stack">
-              {command("Equation", "equation", false, "dialog:equation")}
+              {command("Equation", "equation", false, "equation:new")}
               <Dropdown
                 label="Symbol"
                 icon="symbol"

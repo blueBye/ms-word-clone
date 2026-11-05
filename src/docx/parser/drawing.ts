@@ -3,6 +3,7 @@ import type { DrawingInline, DrawingPosition } from "../../model/document.js";
 import { relationshipAttribute } from "../relationships.js";
 import { childElements, descendants, parseXml } from "./xml.js";
 import type { BlockParser, ParseContext } from "./context.js";
+import { readImageEffects } from "../image-effects.js";
 
 function numberAttribute(
   node: Element | undefined,
@@ -102,9 +103,10 @@ export function parseDrawing(
       shapeProperties ?? pictureProperties ?? anchor,
       "prstGeom",
     )[0];
-    const propertyChildren = shapeProperties
-      ? childElements(shapeProperties)
-      : [];
+    const propertyChildren =
+      (shapeProperties ?? pictureProperties)
+        ? childElements((shapeProperties ?? pictureProperties)!)
+        : [];
     const shapeStyle =
       shapeRoot &&
       childElements(shapeRoot).find((n) => n.localName === "style");
@@ -199,9 +201,16 @@ export function parseDrawing(
         "unsupported-image",
         "An external, missing or unsupported image was not loaded.",
       );
-    const kind = geometry?.getAttribute("prst") ?? "rect";
+    const iconGuide = descendants(shapeProperties ?? anchor, "gd").find((n) =>
+      n.getAttribute("name")?.startsWith("docx_icon_"),
+    );
+    const kind =
+      iconGuide?.getAttribute("name")?.slice(5) ??
+      geometry?.getAttribute("prst") ??
+      "rect";
     if (
       shapeRoot &&
+      !kind.startsWith("icon_") &&
       ![
         "rect",
         "ellipse",
@@ -243,6 +252,7 @@ export function parseDrawing(
           ? {
               dataUrl,
               opacity: imageOpacity(image),
+              ...readImageEffects(image),
               crop: crop
                 ? {
                     left: numberAttribute(crop, "l", 100000),
@@ -294,6 +304,7 @@ export function parseDrawing(
                 childElements(anchor).find((n) =>
                   n.localName?.startsWith("wrap"),
                 )?.localName ?? "wrapNone",
+              locked: anchor.getAttribute("locked") === "1",
             }
           : undefined,
     };

@@ -84,6 +84,7 @@ export function usePageEditor(options: Options) {
     current?.remove();
   }
   function capture(manual = false) {
+    if(latest.current.container.current?.dataset.objectSelection)return selection.current;
     const picked =
       latest.current.container.current &&
       readSelection(latest.current.container.current);
@@ -608,6 +609,7 @@ export function usePageEditor(options: Options) {
     container.setAttribute("aria-multiline", "true");
     container.tabIndex = 0;
     const activate = () => {
+      if(container.dataset.objectSelection)return;
       const picked = readSelection(container);
       if (!picked) return; // Leave a multi-paragraph native selection intact.
       if (!latest.current.session?.capability(picked.id).text) return;
@@ -643,6 +645,7 @@ export function usePageEditor(options: Options) {
       // Let the browser place and extend the range. Activate the draft after mouseup.
     };
     const before = (event: InputEvent) => {
+      if(container.dataset.objectSelection){event.preventDefault();return;}
       if (waiting()) {
         event.preventDefault();
         if (event.inputType === "insertText" && event.data)

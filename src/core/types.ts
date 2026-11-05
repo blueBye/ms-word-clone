@@ -75,6 +75,47 @@ export interface ParagraphFormat {
 }
 export type EditCommand =
   | {
+      type: "table";
+      id: string;
+      action?:
+        | "insertRowAbove"
+        | "insertRowBelow"
+        | "insertColumnBefore"
+        | "insertColumnAfter"
+        | "deleteRow"
+        | "deleteColumn"
+        | "deleteTable"
+        | "merge"
+        | "split"
+        | "distributeRows"
+        | "distributeColumns"
+        | "autofitContents"
+        | "autofitWindow"
+        | "fixedWidth";
+      range?: { top: number; bottom: number; left: number; right: number };
+      rows?: number;
+      columns?: number;
+      format?: {
+        shading?: string;
+        borders?: "all" | "outside" | "none" | "bottom";
+        borderColor?: string;
+        borderWidthPt?: number;
+        verticalAlign?: "top" | "center" | "bottom";
+        cellMargins?: {
+          top: number;
+          right: number;
+          bottom: number;
+          left: number;
+        };
+        columnWidthPt?: number;
+        rowHeightPt?: number;
+        repeatHeader?: boolean;
+        cantSplit?: boolean;
+        alignment?: "left" | "center" | "right";
+        style?: "grid" | "banded" | "plain";
+      };
+    }
+  | {
       type: "sectionBreak";
       id: string;
       start: number;
@@ -197,6 +238,7 @@ export type EditCommand =
   | { type: "joinParagraph"; id: string; direction: "backward" | "forward" }
   | {
       type: "updateStyleFromSelection";
+      normalizeParagraph?: boolean;
       id: string;
       styleId: string;
       start: number;

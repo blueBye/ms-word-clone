@@ -3,6 +3,8 @@ import { textEffectsStyle } from "./text-effects.js";
 import { ChartView, EquationView } from "./StructuredObjects.js";
 import { ModelView } from "./ModelView.js";
 import { VideoView } from "./VideoView.js";
+import { useDrawingPosition } from "./useDrawingPosition.js";
+import { shapePaths as presetPaths, iconPaths } from "../model/graphics.js";
 import type { CSSProperties, ReactNode } from "react";
 import { getParagraphs, getTextRuns } from "../model/traversal.js";
 import { localizeDigits } from "../model/numerals.js";
@@ -28,22 +30,7 @@ const EAST_ASIAN =
   /\p{Script_Extensions=Han}|\p{Script_Extensions=Hiragana}|\p{Script_Extensions=Katakana}|\p{Script_Extensions=Hangul}/u;
 const NEUTRAL = /^[\p{P}\p{Z}\p{M}\p{Cf}]+$/u;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const shapePaths: Record<string, string> = {
-  triangle: "M50 0 100 100H0Z",
-  rtTriangle: "M0 0 100 100H0Z",
-  diamond: "M50 0 100 50 50 100 0 50Z",
-  hexagon: "M25 0H75L100 50 75 100H25L0 50Z",
-  pentagon: "M50 0 100 38 80 100H20L0 38Z",
-  chevron: "M0 0H60L100 50 60 100H0L40 50Z",
-  rightArrow: "M0 30H60V0L100 50 60 100V70H0Z",
-  leftArrow: "M100 30H40V0L0 50 40 100V70H100Z",
-  upArrow: "M30 100V40H0L50 0 100 40H70V100Z",
-  downArrow: "M30 0V60H0L50 100 100 60H70V0Z",
-  star5: "M50 0 61 35 98 35 68 57 79 94 50 72 21 94 32 57 2 35 39 35Z",
-  plus: "M35 0H65V35H100V65H65V100H35V65H0V35H35Z",
-  heart: "M50 95 7 52C-15 22 15-15 50 20 85-15 115 22 93 52Z",
-  line: "M0 100 100 0",
-};
+const shapePaths = { ...presetPaths, ...iconPaths };
 type Script = "ascii" | "hAnsi" | "eastAsia" | "cs";
 
 function paragraphMarkScript(properties: RunProperties): Script {
@@ -281,6 +268,7 @@ function Drawing({
   index?: number;
 }) {
   const Container = d.blocks || d.children ? "div" : "span";
+  const drawingRef = useDrawingPosition(d, context.page, index !== undefined);
   const anchor = d.position;
   const horizontal = anchor?.horizontal;
   const vertical = anchor?.vertical;
@@ -288,11 +276,13 @@ function Drawing({
   const pageTop = context.page?.margins?.top ?? 72;
   const style: CSSProperties = {
     display: "inline-block",
-    width: `${d.widthPt}pt`,
-    height: `${d.heightPt}pt`,
+    boxSizing: "border-box",
+    width: d.equation ? undefined : `${d.widthPt}pt`,
+    height: d.equation ? undefined : `${d.heightPt}pt`,
+    maxWidth: !anchor ? "100%" : undefined,
     verticalAlign: "middle",
     position: anchor ? "absolute" : "relative",
-    overflow: d.blocks ? "visible" : "hidden",
+    overflow: d.blocks || d.equation ? "visible" : "hidden",
     backgroundColor: shapePaths[d.shape?.kind ?? ""]
       ? undefined
       : d.shape?.fill,
@@ -329,6 +319,9 @@ function Drawing({
   const height = Math.max(0.001, 1 - (crop?.top ?? 0) - (crop?.bottom ?? 0));
   return (
     <Container
+      ref={(node) => {
+        drawingRef.current = node;
+      }}
       data-drawing-owner={context.paragraphId}
       data-drawing-index={index}
       contentEditable={false}
@@ -419,6 +412,7 @@ function Drawing({
           alt={d.alt}
           draggable={false}
           style={{
+            filter: `brightness(${1 + (d.image.brightness ?? 0)}) contrast(${1 + (d.image.contrast ?? 0)}) grayscale(${d.image.grayscale ? 1 : 0}) blur(${d.image.blurPt ?? 0}pt)`,
             display: "block",
             position: "absolute",
             maxWidth: "none",

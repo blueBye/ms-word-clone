@@ -1,4 +1,7 @@
 export type RulerHandle = "first" | "hanging" | "start" | "end";
+export const RULER_STEP_PT = 4.5; // 1/16 inch, matching the small visible ticks.
+export const snapRuler = (value: number) =>
+  Math.round(value / RULER_STEP_PT) * RULER_STEP_PT;
 export function rulerChange(
   handle: RulerHandle,
   position: number,

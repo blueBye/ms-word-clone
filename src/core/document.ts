@@ -22,7 +22,10 @@ import {
   validateRange,
   validateText,
 } from "./text.js";
-import { selectionStyleDelta } from "./style-selection.js";
+import {
+  selectionStyleDelta,
+  normalizeParagraphStyle,
+} from "./style-selection.js";
 import { ListStore, type ListDefinition } from "./lists.js";
 import { editStructure } from "./structure.js";
 import { searchMatches, type SearchOptions } from "./search.js";
@@ -31,6 +34,8 @@ import { hyperlink } from "./assets.js";
 import { validateDrawing } from "./objects.js";
 import { arrangeObjects } from "./arrange.js";
 import { sectionTarget, pageForParagraph } from "./sections.js";
+import { fitSectionDrawings } from "./layout.js";
+import { editTable } from "./tables.js";
 
 export interface EngineSnapshot {
   document: DocumentIR;
@@ -455,6 +460,16 @@ export class DocumentEngine implements DocumentSession {
   }
   private apply(command: EditCommand) {
     if (this.lockedReason) throw new Error(this.lockedReason);
+    if (command.type === "table") {
+      const result = editTable(this.value, command, () => `p${this.nextId++}`);
+      this.restore({
+        document: result.document,
+        styles: this.store.snapshot(),
+        lists: this.lists.snapshot(),
+      });
+      this.currentSelection = result.selection;
+      return;
+    }
     if (command.type === "sectionBreak") {
       const p = this.resolved.get(command.id);
       if (!p || !this.value.blocks.includes(p))
@@ -648,6 +663,8 @@ export class DocumentEngine implements DocumentSession {
         },
         command.id,
       );
+      for (const change of fitSectionDrawings(this.value, command.id))
+        this.apply(change);
       return;
     }
     const id = "id" in command ? command.id : undefined;
@@ -672,6 +689,9 @@ export class DocumentEngine implements DocumentSession {
         finite(format.lineNumbers.distancePt, 0, 144);
       }
       this.updatePage(format, command.id);
+      if (format.widthPt !== undefined || format.margins || format.columns)
+        for (const change of fitSectionDrawings(this.value, command.id))
+          this.apply(change);
       return;
     }
     if (command.type === "drawing") {
@@ -841,6 +861,8 @@ export class DocumentEngine implements DocumentSession {
         for (const margin of Object.values(command.margins))
           finite(margin, 0, 15840);
       this.updatePage(page, command.id);
+      for (const change of fitSectionDrawings(this.value, command.id))
+        this.apply(change);
       return;
     }
     if (
@@ -874,13 +896,21 @@ export class DocumentEngine implements DocumentSession {
       if (!style)
         throw new Error("The selected style does not exist in this document.");
       const delta = selectionStyleDelta(p!, command.start, command.end, style);
-      if (!Object.keys(delta.run).length) return;
-      this.editStyle({
-        type: "style",
-        styleId: command.styleId,
-        run: delta.run,
-      });
-      if (p!.properties.styleId === command.styleId)
+      if (!Object.keys(delta.run).length && !command.normalizeParagraph) return;
+      if (Object.keys(delta.run).length)
+        this.editStyle({
+          type: "style",
+          styleId: command.styleId,
+          run: delta.run,
+        });
+      if (command.normalizeParagraph)
+        this.setParagraph(
+          normalizeParagraphStyle(
+            this.resolved.get(command.id)!,
+            command.styleId,
+          ),
+        );
+      else if (p!.properties.styleId === command.styleId)
         this.setParagraph(
           rewriteParagraph(
             this.resolved.get(command.id)!,
