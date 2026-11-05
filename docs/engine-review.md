@@ -1,5 +1,7 @@
 # DOCX engine review
 
+> **Historical source review:** Superseded for implementation status by [engine architecture](engine-architecture.md) and [feature status](feature-status.md). Retained for background research.
+
 For the current document-core separation, d2ts integration and source-preserving adapter lifecycle, see the [2026-11-05 architecture review](engine-architecture.md). The assessment below is historical.
 
 Historical baseline review: the subsequent 0.2 sample-driven pass implements several findings below. See [current support](compatibility.md) and [four-document results](sample-compatibility.md) for the updated state; unresolved preservation/export and visual-layout limits remain tracked.

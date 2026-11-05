@@ -1,7 +1,25 @@
+# Dependencies and generated builds
 node_modules/
 dist/
-.cache/
-demo-dist/
 .next/
+demo-dist/
+.cache/
+coverage/
 *.tsbuildinfo
 next-env.d.ts
+
+# Local environment, keys and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# Local logs, editor and OS files
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.vercel/

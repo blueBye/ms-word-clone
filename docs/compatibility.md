@@ -1,4 +1,6 @@
-# DOCX compatibility matrix
+# DOCX compatibility matrix (historical import/preview baseline)
+
+> **Historical snapshot:** This table was written before the current DOCX editing/export session and ribbons were implemented. In particular, rows saying editing or DOCX writing are “No” are **not current**. For public feature claims, refer to the [current feature status](feature-status.md) and [known limitations](limitations.md).
 
 Baseline: 2026-10-31, updated after the four-document compatibility pass. “Partial” means there are known lossy or approximate behaviors. “No” means absent, not merely untested. The table below is the original parser/preview baseline. Editing/export and preservation have since been introduced for a bounded subset; see [current Home editing status](home-editor-status.md). See [sample results](sample-compatibility.md) for measured evidence and remaining limits.
 

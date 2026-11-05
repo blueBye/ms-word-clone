@@ -1,5 +1,7 @@
 # Compatibility work driven by the four supplied samples
 
+> **Limited historical sample set:** This report describes an earlier four-document compatibility pass and should not be used as a current universal compatibility claim. See [feature status](feature-status.md).
+
 The files are read from their original locations. Personal document text, images and full DOCX packages are not added to tracked tests or public app assets. Synthetic regression fixtures reproduce the relevant markup with neutral text.
 
 ## Main causes and implemented changes

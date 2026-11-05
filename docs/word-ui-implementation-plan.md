@@ -1,5 +1,7 @@
 # Word-like web UI implementation plan
 
+> **Historical plan:** The status below predates the implemented ribbons and editing/export paths. For current behavior, see [feature status](feature-status.md), [Home](home-editor-status.md) and [Insert/Layout](ribbon-status.md).
+
 Date: 2026-11-01. Status: **planned; no ribbon or editing implementation in this audit**. Based on the [installed Word inventory](word-ui-inventory.md), current source and [engine roadmap](development-plan.md).
 
 ## Outcome and scope

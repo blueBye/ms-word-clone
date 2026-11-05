@@ -1,5 +1,7 @@
 # DOCX engine and Next.js development plan
 
+> **Historical roadmap:** Milestone progress statements here reflect the earlier planning baseline, not current code. See [current feature status](feature-status.md), [architecture](engine-architecture.md) and [documentation index](README.md).
+
 UI planning update (2026-11-01): the [installed Word inventory](word-ui-inventory.md) and [UI implementation plan](word-ui-implementation-plan.md) now define File/Home/Insert/Layout. The next application batch is a Word-like shell around the approved preview, followed by an editing/preservation prototype. The engine gates below remain required before enabling edited DOCX export; this planning update does not complete them.
 
 Date: 2026-10-31. This plan follows the [source review](engine-review.md) and [feature matrix](compatibility.md). The current change completes M0 only. M1–M6 describe future work, with gates that prevent unsupported content from being silently rewritten.
