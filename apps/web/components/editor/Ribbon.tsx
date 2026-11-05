@@ -1,78 +1,439 @@
-import type { DocumentIR, Paragraph, ParagraphFormat, RunFormat } from '@local/docx-ir-engine/core';
-import { Group, Menu, MenuItem, Tool } from './Controls';
+﻿import type {
+  DocumentIR,
+  Paragraph,
+  ParagraphFormat,
+  RunFormat,
+} from "@local/docx-ir-engine/core";
+import { Group } from "./Controls";
+import {
+  RibbonCommand as Command,
+  RibbonDropdown as Dropdown,
+  RibbonChoice as Choice,
+  TablePicker,
+} from "./RibbonControls";
+import { RibbonIcon } from "./RibbonIcon";
 
-export type RibbonTab='Home'|'Insert'|'Layout';
+export type RibbonTab = "Home" | "Insert" | "Layout";
 export interface RibbonProps {
-  tab:RibbonTab; document:DocumentIR|null; selected?:Paragraph; range?:{start:number;end:number}|null;
-  disabled:boolean; canFormat:boolean; canPage:boolean; families:string[];
-  onRun:(format:RunFormat)=>void; onParagraph:(format:ParagraphFormat)=>void; onAction:(name:string)=>void;
+  tab: RibbonTab;
+  document: DocumentIR | null;
+  selected?: Paragraph;
+  range?: { start: number; end: number } | null;
+  disabled: boolean;
+  canFormat: boolean;
+  canPage: boolean;
+  families: string[];
+  onRun: (format: RunFormat) => void;
+  onParagraph: (format: ParagraphFormat) => void;
+  onAction: (name: string) => void;
 }
-const later='Preserved on import; editing is not available yet.';
-export function Ribbon({tab,document,selected,range,disabled,canFormat,canPage,families,onRun,onParagraph,onAction}:RibbonProps) {
-  const runs=selected?.children.filter(c=>c.type==='text') ?? [];
-  let offset=0;
-  const chosen=runs.filter(run=>{const start=offset;offset+=run.text.length;return !range || range.start===range.end || (offset>range.start && start<range.end);});
-  const marks=chosen[0]?.properties;
-  const states=(key:'bold'|'italic')=>{
-    const values=chosen.flatMap(r=>[!!r.properties[key],!!(r.properties.complexScript?.[key] ?? false)]);
-    return values.length && values.every(Boolean) ? true : values.some(Boolean) ? 'mixed' as const : false;
-  };
-  const family=(selected?.properties.direction==='rtl' ? marks?.complexScript?.fontFamily : marks?.fontFamily) ?? '';
-  const size=(selected?.properties.direction==='rtl' ? marks?.complexScript?.fontSizePt : marks?.fontSizePt) ?? 12;
-  const paragraphDisabled=disabled||!selected;
-  return <div className="ribbon" id={`ribbon-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-    {tab==='Home'&&<>
-      <Group label="Clipboard"><Tool label="Paste" icon="clipboard" large disabled={disabled||!canFormat} onClick={()=>onAction('paste')}/><div className="tool-stack"><Tool label="Cut" icon="cut" disabled={disabled||!range||range.start===range.end||!canFormat} onClick={()=>onAction('cut')}/><Tool label="Copy" icon="copy" disabled={!selected} onClick={()=>onAction('copy')}/><Tool label="Edit text" icon="page" disabled={disabled||!canFormat} onClick={()=>onAction('edit')}/></div></Group>
-      <Group label="Font" more={()=>onAction('fonts')}><div className="font-tools"><div className="tool-row">
-        <input key={`${selected?.id}-${family}`} className="font-input" aria-label="Font family" list="ribbon-fonts" defaultValue={family} placeholder="Font" disabled={disabled||!canFormat} onBlur={e=>{if(e.target.value.trim()&&e.target.value!==family)onRun({fontFamily:e.target.value});}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}}/>
-        <datalist id="ribbon-fonts">{[...new Set(['Calibri','Arial','Tahoma','Times New Roman','Cambria',...families])].map(f=><option key={f} value={f}/>)}</datalist>
-        <input key={`${selected?.id}-${size}`} className="size-input" aria-label="Font size" type="number" min="1" max="400" step="0.5" defaultValue={size} disabled={disabled||!canFormat} onBlur={e=>{if(Number(e.target.value)!==size)onRun({fontSizePt:Number(e.target.value)});}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}}/>
-        <Tool label="Increase font size" disabled={disabled||!canFormat} onClick={()=>onRun({fontSizePt:Math.min(400,size+1)})}><span className="grow-type">A↑</span></Tool>
-        <Tool label="Decrease font size" disabled={disabled||!canFormat} onClick={()=>onRun({fontSizePt:Math.max(1,size-1)})}><span>A↓</span></Tool>
-      </div><div className="tool-row">
-        <Tool label="Bold" active={states('bold')} disabled={disabled||!canFormat} onClick={()=>onRun({bold:states('bold')!==true})}><b>B</b></Tool>
-        <Tool label="Italic" active={states('italic')} disabled={disabled||!canFormat} onClick={()=>onRun({italic:states('italic')!==true})}><i>I</i></Tool>
-        <Tool label="Underline" active={!!marks?.underline&&marks.underline!=='none'} disabled={disabled||!canFormat} onClick={()=>onRun({underline:marks?.underline&&marks.underline!=='none'?'none':'single'})}><u>U</u></Tool>
-        <Tool label="Strikethrough" active={!!marks?.strike} disabled={disabled||!canFormat} onClick={()=>onRun({strike:!marks?.strike})}><s>ab</s></Tool>
-        <Tool label="Subscript" active={marks?.verticalAlign==='subscript'} disabled={disabled||!canFormat} onClick={()=>onRun({verticalAlign:marks?.verticalAlign==='subscript'?'baseline':'subscript'})}>x<sub>2</sub></Tool>
-        <Tool label="Superscript" active={marks?.verticalAlign==='superscript'} disabled={disabled||!canFormat} onClick={()=>onRun({verticalAlign:marks?.verticalAlign==='superscript'?'baseline':'superscript'})}>x<sup>2</sup></Tool>
-        <Menu label="Highlight"><div className="color-swatches">{[['Yellow','yellow','#ffff00'],['Green','green','#00ff00'],['Cyan','cyan','#00ffff'],['Pink','magenta','#ff00ff'],['Gray','lightGray','#c0c0c0']].map(([label,value,color])=><button key={value} title={label} aria-label={`Highlight ${label}`} style={{background:color}} disabled={disabled||!canFormat} onClick={()=>onRun({highlight:value})}/>)}</div><MenuItem disabled={disabled||!canFormat} onClick={()=>onRun({highlight:'none'})}>No highlight</MenuItem></Menu>
-        <label className={`color-tool ${disabled||!canFormat?'is-disabled':''}`} title="Font color"><b>A</b><input aria-label="Font color" type="color" value={marks?.color?.match(/^#[a-f0-9]{6}$/i)?marks.color:'#000000'} disabled={disabled||!canFormat} onChange={e=>onRun({color:e.target.value})}/></label>
-      </div></div></Group>
-      <Group label="Paragraph" more={()=>onAction('paragraph')}><div className="tool-stack"><div className="tool-row">
-        <Menu label="Bullets" icon="list"><MenuItem disabled reason={later}>Bullet library</MenuItem><MenuItem disabled reason={later}>Define New Bullet…</MenuItem></Menu>
-        <Menu label="Numbering"><MenuItem disabled reason={later}>Decimal, Persian, Roman and letters</MenuItem><MenuItem disabled reason={later}>Define Number Format…</MenuItem><MenuItem disabled reason={later}>Multilevel List…</MenuItem></Menu>
-        <Tool label="Decrease indent" disabled={paragraphDisabled} onClick={()=>onParagraph({indentStartPt:Math.max(0,(selected?.properties.indentStartPt??selected?.properties.indentLeftPt??0)-18)})}>⇤</Tool>
-        <Tool label="Increase indent" disabled={paragraphDisabled} onClick={()=>onParagraph({indentStartPt:(selected?.properties.indentStartPt??selected?.properties.indentLeftPt??0)+18})}>⇥</Tool>
-      </div><div className="tool-row">
-        {(['left','center','right','justify'] as const).map(alignment=><Tool key={alignment} label={`Align ${alignment}`} icon={alignment==='justify'?'justify':`align${alignment[0].toUpperCase()}${alignment.slice(1)}`} active={selected?.properties.alignment===alignment} disabled={paragraphDisabled} onClick={()=>onParagraph({alignment})}/>)}
-        <Menu label="Spacing"><p className="menu-heading">Line spacing</p>{[1,1.15,1.5,2,2.5,3].map(value=><MenuItem key={value} disabled={paragraphDisabled} onClick={()=>onParagraph({lineSpacing:value})}>{value.toFixed(value%1?2:1)}</MenuItem>)}<MenuItem disabled={paragraphDisabled} onClick={()=>onAction('paragraph')}>Line Spacing Options…</MenuItem></Menu>
-        <Tool label="Left-to-right paragraph" active={selected?.properties.direction==='ltr'} disabled={paragraphDisabled} onClick={()=>onParagraph({direction:'ltr'})}>¶→</Tool>
-        <Tool label="Right-to-left paragraph" active={selected?.properties.direction==='rtl'} disabled={paragraphDisabled} onClick={()=>onParagraph({direction:'rtl'})}>←¶</Tool>
-      </div></div></Group>
-      <Group label="Styles"><button className="style-tile" onClick={()=>onAction('styles')}><span className="style-sample">AaBbCc</span><span>{selected?.properties.styleId ?? 'Document styles'}</span></button></Group>
-      <Group label="Editing"><div className="tool-stack"><Tool label="Find" icon="search" onClick={()=>onAction('find')}/><Tool label="Replace" onClick={()=>onAction('replace')}/><Tool label="Paragraph editor" onClick={()=>onAction('edit')} disabled={disabled||!canFormat}/></div></Group>
-    </>}
-    {tab==='Insert'&&<>
-      <Group label="Pages"><div className="tool-stack"><Tool label="New paragraph" icon="page" disabled={disabled||!document} onClick={()=>onAction('insertParagraph')}/><Tool label="Blank page" icon="plus" disabled={disabled||!document} onClick={()=>onAction('blankPage')}/><Tool label="Page break before" disabled={paragraphDisabled} onClick={()=>onParagraph({pageBreakBefore:!selected?.properties.pageBreakBefore})}/></div></Group>
-      <Group label="Tables"><Menu label="Table" icon="table" large><MenuItem disabled={disabled||!document} onClick={()=>onAction('table')}>Insert Table…</MenuItem><MenuItem disabled reason={later}>Draw Table</MenuItem><MenuItem disabled reason={later}>Quick Tables</MenuItem><MenuItem disabled reason={later}>Convert Text to Table…</MenuItem></Menu></Group>
-      <Group label="Illustrations"><Tool label="Pictures" icon="image" large disabled reason="Image insertion/export is not available yet."/><Menu label="Shapes" large><MenuItem disabled reason={later}>Lines and rectangles</MenuItem><MenuItem disabled reason={later}>Basic shapes and arrows</MenuItem></Menu><Tool label="Chart" large disabled reason={later}/></Group>
-      <Group label="Links"><Tool label="Link" icon="link" large disabled reason="Hyperlink editing is not available yet."/><div className="tool-stack"><Tool label="Bookmark" disabled reason={later}/><Tool label="Cross-reference" disabled reason={later}/></div></Group>
-      <Group label="Header & Footer"><Menu label="Header" icon="page" large><MenuItem onClick={()=>onAction('stories')}>Inspect header text</MenuItem><MenuItem disabled reason={later}>Insert / remove header</MenuItem></Menu><Menu label="Footer" icon="page" large><MenuItem onClick={()=>onAction('stories')}>Inspect footer text</MenuItem><MenuItem disabled reason={later}>Insert / remove footer</MenuItem></Menu><Tool label="Page number" large disabled reason="Existing PAGE/NUMPAGES fields are displayed. Field insertion is not available yet."/></Group>
-      <Group label="Text"><div className="tool-stack"><Tool label="Text Box" disabled reason={later}/><Tool label="Date & Time" disabled={disabled||!canFormat} onClick={()=>onAction('date')}/><Tool label="Quick Parts" disabled reason={later}/></div></Group>
-      <Group label="Symbols"><Menu label="Symbol" large><div className="symbol-grid">{['☐','☑','✓','©','®','™','±','×','÷','α','β','Ω','→','←','…','—'].map(symbol=><button key={symbol} disabled={disabled||!canFormat} onClick={()=>onAction(`symbol:${symbol}`)}>{symbol}</button>)}</div><MenuItem disabled={disabled||!canFormat} onClick={()=>onAction('symbol:\u200c')}>Zero-width non-joiner (ZWNJ)</MenuItem><MenuItem disabled={disabled||!canFormat} onClick={()=>onAction('symbol:\u00a0')}>Nonbreaking space</MenuItem></Menu><Tool label="Equation" large disabled reason={later}/></Group>
-    </>}
-    {tab==='Layout'&&<>
-      <Group label="Page Setup" more={()=>onAction('page')}><Menu label="Margins" icon="margins" large>{[['Normal','72'],['Narrow','36'],['Moderate','54']].map(([label,value])=><MenuItem key={label} disabled={disabled||!canPage} onClick={()=>onAction(`margin:${value}`)}>{label}<small>{Number(value)/72} inch</small></MenuItem>)}<MenuItem disabled={disabled||!canPage} onClick={()=>onAction('page')}>Custom Margins…</MenuItem></Menu>
-        <Menu label="Orientation" icon="orientation" large>{['Portrait','Landscape'].map(value=><MenuItem key={value} disabled={disabled||!canPage} onClick={()=>onAction(`orientation:${value}`)}>{value}</MenuItem>)}</Menu>
-        <Menu label="Size" icon="page" large>{[['A4','595.3,841.9'],['Letter','612,792'],['Legal','612,1008'],['A5','419.5,595.3']].map(([label,value])=><MenuItem key={label} disabled={disabled||!canPage} onClick={()=>onAction(`size:${value}`)}>{label}</MenuItem>)}<MenuItem disabled={disabled||!canPage} onClick={()=>onAction('page')}>More Paper Sizes…</MenuItem></Menu>
-        <Menu label="Columns" icon="columns" large><MenuItem disabled reason="Multi-column section layout is not implemented yet.">One / Two / Three</MenuItem><MenuItem disabled reason={later}>More Columns…</MenuItem></Menu>
-        <div className="tool-stack"><Menu label="Breaks"><MenuItem disabled={paragraphDisabled} onClick={()=>onParagraph({pageBreakBefore:true})}>Page break before paragraph</MenuItem><MenuItem disabled reason={later}>Column break</MenuItem><MenuItem disabled reason="Full section editing is not implemented yet.">Section: Next / Continuous / Even / Odd</MenuItem></Menu><Tool label="Line Numbers" disabled reason={later}/><Tool label="Hyphenation" disabled reason={later}/></div>
-      </Group>
-      <Group label="Paragraph" more={()=>onAction('paragraph')}><div className="layout-fields">
-        {([['Before','indentStartPt'],['After','indentEndPt']] as const).map(([label,key])=><label key={key}>Indent {label}<input key={`${selected?.id}-${selected?.properties[key]}`} type="number" step="6" defaultValue={selected?.properties[key]??0} disabled={paragraphDisabled} onBlur={e=>{if(Number(e.target.value)!==(selected?.properties[key]??0))onParagraph({[key]:Number(e.target.value)});}}/><span>pt</span></label>)}
-      </div><div className="layout-fields">{([['Before','spaceBeforePt'],['After','spaceAfterPt']] as const).map(([label,key])=><label key={key}>Spacing {label}<input key={`${selected?.id}-${selected?.properties[key]}`} type="number" min="0" max="1000" step="6" defaultValue={selected?.properties[key]??0} disabled={paragraphDisabled} onBlur={e=>{if(Number(e.target.value)!==(selected?.properties[key]??0))onParagraph({[key]:Number(e.target.value)});}}/><span>pt</span></label>)}</div></Group>
-      <Group label="Arrange"><Tool label="Position" icon="page" large disabled reason={later}/><Tool label="Wrap Text" icon="alignLeft" large disabled reason={later}/><div className="tool-stack"><Tool label="Bring Forward" disabled reason={later}/><Tool label="Send Backward" disabled reason={later}/><Tool label="Selection Pane" onClick={()=>onAction('outline')}/></div><Menu label="Align" large><MenuItem disabled reason={later}>Align to page / margin</MenuItem><MenuItem disabled reason={later}>Distribute objects</MenuItem><MenuItem disabled reason={later}>Group / Rotate</MenuItem></Menu></Group>
-    </>}
-  </div>;
+export function Ribbon({
+  tab,
+  document,
+  selected,
+  disabled,
+  canFormat,
+  canPage,
+  onParagraph,
+  onAction,
+}: RibbonProps) {
+  const paragraphDisabled = disabled || !selected;
+  const pageDisabled = disabled || !canPage;
+  const command = (
+    label: string,
+    icon: string,
+    large = true,
+    action?: string,
+  ) => (
+    <Command
+      key={label}
+      label={label}
+      icon={icon}
+      large={large}
+      menu={[
+        "Cover Page",
+        "Pictures",
+        "Shapes",
+        "3D Models",
+        "Screenshot",
+        "Page Number",
+        "Text Box",
+        "Quick Parts",
+        "WordArt",
+        "Drop Cap",
+        "Signature Line",
+        "Object",
+        "Equation",
+        "Columns",
+        "Position",
+        "Wrap Text",
+        "Bring Forward",
+        "Send Backward",
+        "Align",
+        "Group",
+        "Rotate",
+        "Line Numbers",
+        "Hyphenation",
+      ].includes(label)}
+      disabled={!action || disabled}
+      onClick={() => action && onAction(action)}
+    />
+  );
+  const properties = selected?.properties;
+  const rtl = properties?.direction === "rtl";
+  const indents = [
+    {
+      label: "Before text",
+      key: "indentStartPt",
+      value:
+        properties?.indentStartPt ??
+        (rtl ? properties?.indentRightPt : properties?.indentLeftPt) ??
+        0,
+    },
+    {
+      label: "After text",
+      key: "indentEndPt",
+      value:
+        properties?.indentEndPt ??
+        (rtl ? properties?.indentLeftPt : properties?.indentRightPt) ??
+        0,
+    },
+  ] as const;
+  const spacings = [
+    {
+      label: "Before",
+      key: "spaceBeforePt",
+      value: properties?.spaceBeforePt ?? 0,
+    },
+    {
+      label: "After",
+      key: "spaceAfterPt",
+      value: properties?.spaceAfterPt ?? 0,
+    },
+  ] as const;
+  return (
+    <div
+      className="ribbon office-ribbon"
+      id={`ribbon-${tab}`}
+      role="tabpanel"
+      aria-labelledby={`tab-${tab}`}
+    >
+      {tab === "Insert" && (
+        <>
+          <Group label="Pages">
+            <div className="office-stack">
+              {command("Cover Page", "cover", false)}
+              <Command
+                label="Blank Page"
+                icon="blank"
+                disabled={disabled || !document}
+                onClick={() => onAction("blankPage")}
+              />
+              <Command
+                label="Page Break"
+                icon="pageBreak"
+                disabled={paragraphDisabled}
+                onClick={() => onParagraph({ pageBreakBefore: true })}
+              />
+            </div>
+          </Group>
+          <Group label="Tables">
+            <Dropdown
+              label="Table"
+              icon="table"
+              large
+              disabled={disabled || !document}
+            >
+              <TablePicker
+                disabled={disabled || !document}
+                onPick={(rows, columns) => onAction(`table:${rows},${columns}`)}
+              />
+              <Choice
+                label="Insert Table…"
+                icon="table"
+                onClick={() => onAction("table")}
+              />
+              <Choice label="Draw Table" disabled />
+              <Choice label="Convert Text to Table…" disabled />
+              <Choice label="Excel Spreadsheet" disabled />
+              <Choice label="Quick Tables" disabled />
+            </Dropdown>
+          </Group>
+          <Group label="Illustrations">
+            {command("Pictures", "picture")}
+            {command("Shapes", "shapes")}
+            {command("Icons", "icons")}
+            {command("3D Models", "model")}
+            {command("SmartArt", "smartArt")}
+            {command("Chart", "chart")}
+            {command("Screenshot", "screenshot")}
+          </Group>
+          <Group label="Media">{command("Online Videos", "video")}</Group>
+          <Group label="Links">
+            <div className="office-stack">
+              {command("Link", "link", false)}
+              {command("Bookmark", "bookmark", false)}
+              {command("Cross-reference", "reference", false)}
+            </div>
+          </Group>
+          <Group label="Comments">{command("Comment", "comment")}</Group>
+          <Group label="Header & Footer">
+            {(["Header", "Footer"] as const).map((label) => (
+              <Dropdown
+                key={label}
+                label={label}
+                icon={label.toLowerCase()}
+                large
+                disabled={!document}
+              >
+                <Choice
+                  label={`View ${label}`}
+                  icon={label.toLowerCase()}
+                  onClick={() => onAction("stories")}
+                />
+                <Choice label={`Edit ${label}`} disabled />
+                <Choice label={`Remove ${label}`} disabled />
+              </Dropdown>
+            ))}
+            {command("Page Number", "pageNumber")}
+          </Group>
+          <Group label="Text">
+            {command("Text Box", "textBox")}
+            {command("Quick Parts", "quickParts")}
+            {command("WordArt", "wordArt")}
+            {command("Drop Cap", "dropCap")}
+            <div className="office-stack">
+              {command("Signature Line", "signature", false)}
+              <Command
+                label="Date & Time"
+                icon="date"
+                disabled={disabled || !canFormat}
+                onClick={() => onAction("date")}
+              />
+              {command("Object", "object", false)}
+            </div>
+          </Group>
+          <Group label="Symbols">
+            <div className="office-stack">
+              {command("Equation", "equation", false)}
+              <Dropdown
+                label="Symbol"
+                icon="symbol"
+                disabled={disabled || !canFormat}
+              >
+                <div className="office-symbol-grid">
+                  {[
+                    "☐",
+                    "☑",
+                    "✓",
+                    "©",
+                    "®",
+                    "™",
+                    "±",
+                    "×",
+                    "÷",
+                    "α",
+                    "β",
+                    "Ω",
+                    "→",
+                    "←",
+                    "…",
+                    "—",
+                  ].map((symbol) => (
+                    <button
+                      type="button"
+                      key={symbol}
+                      title={symbol}
+                      onClick={() => onAction(`symbol:${symbol}`)}
+                    >
+                      {symbol}
+                    </button>
+                  ))}
+                </div>
+                <Choice
+                  label="Zero-width non-joiner"
+                  description="ZWNJ"
+                  onClick={() => onAction("symbol:\u200c")}
+                />
+                <Choice
+                  label="Nonbreaking Space"
+                  onClick={() => onAction("symbol:\u00a0")}
+                />
+              </Dropdown>
+            </div>
+          </Group>
+        </>
+      )}
+      {tab === "Layout" && (
+        <>
+          <Group label="Page Setup" more={() => onAction("page")}>
+            <Dropdown
+              label="Margins"
+              icon="margins"
+              large
+              disabled={pageDisabled}
+            >
+              <Choice
+                label="Normal"
+                icon="margins"
+                description={"Top: 1″   Bottom: 1″   Left: 1″   Right: 1″"}
+                onClick={() => onAction("margin:72")}
+              />
+              <Choice
+                label="Narrow"
+                icon="margins"
+                description={
+                  "Top: 0.5″   Bottom: 0.5″   Left: 0.5″   Right: 0.5″"
+                }
+                onClick={() => onAction("margin:36")}
+              />
+              <Choice
+                label="Moderate"
+                icon="margins"
+                description={
+                  "Top: 1″   Bottom: 1″   Left: 0.75″   Right: 0.75″"
+                }
+                onClick={() => onAction("margin:54")}
+              />
+              <Choice
+                label="Wide"
+                icon="margins"
+                description={"Top: 1″   Bottom: 1″   Left: 2″   Right: 2″"}
+                onClick={() => onAction("margins:72,144,72,144")}
+              />
+              <Choice label="Mirrored" disabled />
+              <hr />
+              <Choice
+                label="Custom Margins…"
+                onClick={() => onAction("page")}
+              />
+            </Dropdown>
+            <Dropdown
+              label="Orientation"
+              icon="orientation"
+              large
+              disabled={pageDisabled}
+            >
+              {["Portrait", "Landscape"].map((label) => (
+                <Choice
+                  key={label}
+                  label={label}
+                  icon="orientation"
+                  checked={
+                    label ===
+                    ((document?.page?.widthPt ?? 0) >
+                    (document?.page?.heightPt ?? 0)
+                      ? "Landscape"
+                      : "Portrait")
+                  }
+                  onClick={() => onAction(`orientation:${label}`)}
+                />
+              ))}
+            </Dropdown>
+            <Dropdown label="Size" icon="size" large disabled={pageDisabled}>
+              {[
+                ["Letter", "612,792", "8.5″ × 11″"],
+                ["Legal", "612,1008", "8.5″ × 14″"],
+                ["A3", "841.9,1190.6", "29.7 cm × 42 cm"],
+                ["A4", "595.3,841.9", "21 cm × 29.7 cm"],
+                ["A5", "419.5,595.3", "14.8 cm × 21 cm"],
+              ].map(([label, value, description]) => (
+                <Choice
+                  key={label}
+                  label={label}
+                  description={description}
+                  icon="blank"
+                  onClick={() => onAction(`size:${value}`)}
+                />
+              ))}
+              <hr />
+              <Choice
+                label="More Paper Sizes…"
+                onClick={() => onAction("page")}
+              />
+            </Dropdown>
+            {command("Columns", "columns")}
+            <div className="office-stack">
+              <Dropdown
+                label="Breaks"
+                icon="pageBreak"
+                disabled={paragraphDisabled}
+              >
+                <p className="office-menu-heading">Page Breaks</p>
+                <Choice
+                  label="Page"
+                  icon="pageBreak"
+                  description="Start the paragraph on the next page."
+                  onClick={() => onParagraph({ pageBreakBefore: true })}
+                />
+                <Choice label="Column" disabled />
+                <Choice label="Text Wrapping" disabled />
+                <p className="office-menu-heading">Section Breaks</p>
+                {["Next Page", "Continuous", "Even Page", "Odd Page"].map(
+                  (label) => (
+                    <Choice key={label} label={label} disabled />
+                  ),
+                )}
+              </Dropdown>
+              {command("Line Numbers", "lineNumbers", false)}
+              {command("Hyphenation", "hyphenation", false)}
+            </div>
+          </Group>
+          <Group label="Paragraph" more={() => onAction("paragraph")}>
+            {[
+              { heading: "Indent", fields: indents, icon: "columns" },
+              { heading: "Spacing", fields: spacings, icon: "alignLeft" },
+            ].map(({ heading, fields, icon }) => (
+              <div className="office-paragraph-fields" key={heading}>
+                <span className="office-field-heading">{heading}</span>
+                {fields.map(({ label, key, value }) => (
+                  <label key={key}>
+                    <RibbonIcon name={icon} size={16} />
+                    <span>{label}:</span>
+                    <span className="office-number-field">
+                      <input
+                        aria-label={`${heading} ${label}`}
+                        key={`${selected?.id}-${value}`}
+                        type="number"
+                        min={heading === "Spacing" ? 0 : -720}
+                        max="1440"
+                        step="6"
+                        defaultValue={value}
+                        disabled={paragraphDisabled}
+                        onBlur={(e) => {
+                          const n = e.currentTarget.valueAsNumber;
+                          if (
+                            Number.isFinite(n) &&
+                            e.currentTarget.validity.valid &&
+                            n !== value
+                          )
+                            onParagraph({ [key]: n });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                        }}
+                      />
+                      <span>pt</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </Group>
+          <Group label="Arrange">
+            {command("Position", "position")}
+            {command("Wrap Text", "wrap")}
+            {command("Bring Forward", "forward")}
+            {command("Send Backward", "backward")}
+            {command("Selection Pane", "selection", true, "outline")}
+            <div className="office-stack">
+              {command("Align", "alignLeft", false)}
+              {command("Group", "group", false)}
+              {command("Rotate", "rotate", false)}
+            </div>
+          </Group>
+        </>
+      )}
+    </div>
+  );
 }

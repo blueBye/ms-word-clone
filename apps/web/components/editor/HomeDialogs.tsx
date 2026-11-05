@@ -421,8 +421,7 @@ export function HomeDialogs(p: Props) {
                       choose(() => p.onParagraph({ styleId: style.id }))
                     }
                   >
-                    <StylePreview style={style} />
-                    <small>{style.name}</small>
+                    <StylePreview style={style} compact />
                   </button>
                 ))}
             </div>
@@ -696,7 +695,13 @@ function HomeSurface({
   children: ReactNode;
 }) {
   return dropdowns.has(name) ? (
-    <HomeMenu label={title} anchor={anchor} onClose={onClose}>
+    <HomeMenu
+      label={title}
+      anchor={anchor}
+      onClose={onClose}
+      placement={name === "styles" ? "overlap" : "below"}
+      className={name === "styles" ? "styles-gallery-popover" : ""}
+    >
       {children}
     </HomeMenu>
   ) : (

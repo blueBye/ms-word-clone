@@ -320,11 +320,20 @@ interface Props {
   onAction: (action: string) => void;
   onDialog: (dialog: string, anchor?: MenuAnchor) => void;
   onStyleContext: (id: string, anchor: MenuAnchor) => void;
+  openMenu?: string | null;
+  onDismissMenu?: () => void;
 }
 export function HomeRibbon(p: Props) {
   const trigger = useRef<HTMLElement | null>(null);
   const open = (name: string) => {
-    const element = trigger.current;
+    if (p.openMenu === name) {
+      p.onDismissMenu?.();
+      return;
+    }
+    const element =
+      name === "styles"
+        ? trigger.current?.closest<HTMLElement>(".home-style-picker")
+        : trigger.current;
     const rect = element?.getBoundingClientRect();
     p.onDialog(
       name,
@@ -357,7 +366,12 @@ export function HomeRibbon(p: Props) {
       role="tabpanel"
       aria-labelledby="tab-Home"
     >
-      <Group label="Clipboard" more={() => open("clipboard")}>
+      <Group
+        label="Clipboard"
+        more={() => p.onAction("clipboard")}
+        moreLabel="Clipboard pane"
+        morePopup={false}
+      >
         <Split
           label="Paste"
           icon="paste"
@@ -678,59 +692,80 @@ export function HomeRibbon(p: Props) {
           </div>
         </div>
       </Group>
-      <Group label="Styles" more={() => open("styles")}>
-        <div className="home-style-gallery">
-          {p.styles
-            .filter((s) => s.gallery)
-            .slice(0, 12)
-            .map((style) => (
-              <button
-                key={style.id}
-                className={
-                  p.selected?.properties.styleId === style.id ? "selected" : ""
-                }
-                disabled={paragraphDisabled}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => p.onParagraph({ styleId: style.id })}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  p.onStyleContext(
-                    style.id,
-                    e.clientX
-                      ? {
-                          left: e.clientX,
-                          right: e.clientX,
-                          top: e.clientY,
-                          bottom: e.clientY,
-                        }
-                      : rect,
-                  );
-                }}
-              >
-                <StylePreview style={style} compact />
-              </button>
-            ))}
+      <Group
+        label="Styles"
+        more={() => p.onAction("styles")}
+        moreLabel="Styles pane"
+        morePopup={false}
+      >
+        <div className="home-style-picker">
+          <div className="home-style-gallery">
+            {p.styles
+              .filter((s) => s.gallery)
+              .slice(0, 12)
+              .map((style) => (
+                <button
+                  key={style.id}
+                  className={
+                    p.selected?.properties.styleId === style.id
+                      ? "selected"
+                      : ""
+                  }
+                  disabled={paragraphDisabled}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => p.onParagraph({ styleId: style.id })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    p.onStyleContext(
+                      style.id,
+                      e.clientX
+                        ? {
+                            left: e.clientX,
+                            right: e.clientX,
+                            top: e.clientY,
+                            bottom: e.clientY,
+                          }
+                        : rect,
+                    );
+                  }}
+                >
+                  <StylePreview style={style} compact />
+                </button>
+              ))}
+          </div>
+          <button
+            type="button"
+            className="home-style-more"
+            aria-label="More styles"
+            title="More styles"
+            aria-haspopup="menu"
+            aria-expanded={p.openMenu === "styles"}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => open("styles")}
+          >
+            <Icon name="chevron" size={12} />
+          </button>
         </div>
-        <button
-          className="home-style-more"
-          aria-label="More styles"
-          aria-haspopup="menu"
-          onClick={() => open("styles")}
-        >
-          <Icon name="chevron" size={12} />
-        </button>
       </Group>
       <Group label="Editing">
         <div className="home-editing-stack">
           <div className="home-find-split">
-            <button onClick={() => p.onAction("find")}>
+            <button
+              type="button"
+              className="home-find-button"
+              title="Find (Ctrl+F)"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => p.onAction("find")}
+            >
               <HomeIcon name="find" size={17} />
               Find
             </button>
             <button
               aria-label="Find options"
               aria-haspopup="menu"
+              aria-expanded={p.openMenu === "findMenu"}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => open("findMenu")}
             >
               <Icon name="chevron" size={10} />

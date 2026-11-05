@@ -390,6 +390,12 @@ export function usePageEditor(options: Options) {
   function focus() {
     if (window.document.querySelector("dialog[open], [data-home-menu-root]"))
       return;
+    if (
+      window.document.activeElement?.closest(
+        ".task-pane input,.task-pane textarea,.task-pane select",
+      )
+    )
+      return;
     focused.current = true;
     restoring.current = true;
     const el = ensureIsland(true);

@@ -95,11 +95,15 @@ export function HomeMenu({
   anchor,
   onClose,
   children,
+  placement = "below",
+  className = "",
 }: {
   label: string;
   anchor: MenuAnchor | null;
   onClose: () => void;
   children: ReactNode;
+  placement?: "below" | "overlap";
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({
@@ -125,6 +129,7 @@ export function HomeMenu({
           a,
           { width: el.getBoundingClientRect().width, height: el.scrollHeight },
           { width: innerWidth, height: innerHeight },
+          placement,
         ),
       );
     };
@@ -132,7 +137,11 @@ export function HomeMenu({
     const observer = new ResizeObserver(place);
     observer.observe(el);
     const outside = (event: PointerEvent) => {
-      if (!el.contains(event.target as Node)) close.current();
+      if (
+        !el.contains(event.target as Node) &&
+        !anchor.element?.contains(event.target as Node)
+      )
+        close.current();
     };
     window.addEventListener("pointerdown", outside, true);
     window.addEventListener("resize", place);
@@ -157,7 +166,7 @@ export function HomeMenu({
       )
         el.hidePopover();
     };
-  }, [anchor]);
+  }, [anchor, placement]);
   return createPortal(
     <div
       ref={ref}
@@ -165,7 +174,7 @@ export function HomeMenu({
       role="menu"
       aria-label={label}
       data-home-menu-root
-      className="home-dropdown"
+      className={`home-dropdown ${className}`}
       style={{
         position: "fixed",
         inset: "auto",

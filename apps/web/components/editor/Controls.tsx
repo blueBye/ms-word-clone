@@ -46,10 +46,14 @@ export function Group({
   label,
   children,
   more,
+  moreLabel,
+  morePopup = "dialog",
 }: {
   label: string;
   children: ReactNode;
   more?: () => void;
+  moreLabel?: string;
+  morePopup?: "dialog" | "menu" | false;
 }) {
   return (
     <section className="ribbon-group" aria-label={label}>
@@ -58,11 +62,25 @@ export function Group({
         {label}
         {more && (
           <button
-            title={`More ${label} options`}
-            aria-label={`More ${label} options`}
+            type="button"
+            className="ribbon-dialog-launcher"
+            title={moreLabel ?? `More ${label} options`}
+            aria-label={moreLabel ?? `More ${label} options`}
+            aria-haspopup={morePopup || undefined}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={more}
           >
-            ↘
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1"
+            >
+              <path d="M2 8V2h6M5 5l5 5M6 10h4V6" />
+            </svg>
           </button>
         )}
       </div>

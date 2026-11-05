@@ -40,9 +40,12 @@ import { Backstage } from "./editor/Backstage";
 import { usePageEditor, type PageSelection } from "./editor/usePageEditor";
 import { HomeRibbon } from "./editor/HomeRibbon";
 import { HomeDialogs } from "./editor/HomeDialogs";
+import { ClipboardPane } from "./editor/ClipboardPane";
+import { StylesPane } from "./editor/StylesPane";
 import type { MenuAnchor } from "./editor/HomeMenu";
 
 type Pane =
+  | "clipboard"
   | "find"
   | "replace"
   | "edit"
@@ -53,6 +56,7 @@ type Pane =
   | null;
 const MAX_BYTES = 50 * 1024 * 1024;
 const titles: Record<Exclude<Pane, null>, string> = {
+  clipboard: "Clipboard",
   find: "Navigation",
   replace: "Find and replace",
   edit: "Paragraph editor",
@@ -911,6 +915,21 @@ export function DocxWorkspace() {
     }
     const w = document?.page?.widthPt ?? 595.3,
       h = document?.page?.heightPt ?? 841.9;
+    if (name.startsWith("margins:")) {
+      const [top, right, bottom, left] = name.slice(8).split(",").map(Number);
+      page(w, h, { top, right, bottom, left });
+      return;
+    }
+    if (name.startsWith("table:")) {
+      const [rows, columns] = name.slice(6).split(",").map(Number);
+      await execute({
+        type: "insertTable",
+        id: selectedId || undefined,
+        rows,
+        columns,
+      });
+      return;
+    }
     if (name.startsWith("margin:")) {
       const n = Number(name.slice(7));
       page(w, h, {
@@ -935,7 +954,15 @@ export function DocxWorkspace() {
       return;
     }
     if (
-      ["fonts", "find", "replace", "edit", "styles", "outline"].includes(name)
+      [
+        "fonts",
+        "find",
+        "replace",
+        "edit",
+        "styles",
+        "outline",
+        "clipboard",
+      ].includes(name)
     ) {
       setPane(name as Pane);
       return;
@@ -1231,6 +1258,8 @@ export function DocxWorkspace() {
           onParagraph={para}
           onAction={(name) => void action(name)}
           onDialog={openHome}
+          openMenu={homeDialog}
+          onDismissMenu={() => setHomeDialog(null)}
         />
       ) : (
         <Ribbon
@@ -1320,7 +1349,10 @@ export function DocxWorkspace() {
           )}
         </main>
         {pane && (
-          <aside className="task-pane" aria-label={titles[pane]}>
+          <aside
+            className={`task-pane ${pane === "find" || pane === "clipboard" ? "task-pane-leading" : ""}`}
+            aria-label={titles[pane]}
+          >
             <div className="pane-title">
               <h2>{titles[pane]}</h2>
               <button aria-label="Close pane" onClick={() => setPane(null)}>
@@ -1564,37 +1596,25 @@ export function DocxWorkspace() {
                   </details>
                 </>
               )}
+              {pane === "clipboard" && (
+                <ClipboardPane
+                  items={clipboard}
+                  disabled={busy || !canFormat}
+                  onPaste={insertText}
+                  onClear={() => setClipboard([])}
+                />
+              )}
               {pane === "styles" && (
-                <>
-                  <p className="pane-description">
-                    Source style names are retained. Use direct formatting for
-                    edits; shared style-definition editing is not available yet.
-                  </p>
-                  {[
-                    ...new Set(
-                      all.map(
-                        (p) => p.properties.styleId ?? "Default paragraph",
-                      ),
-                    ),
-                  ].map((style) => (
-                    <button
-                      className="pane-style"
-                      key={style}
-                      onClick={() => {
-                        const p = all.find(
-                          (p) =>
-                            (p.properties.styleId ?? "Default paragraph") ===
-                            style,
-                        );
-                        if (p?.id) jump(p.id);
-                      }}
-                    >
-                      <span>AaBbCc</span>
-                      <b>{style}</b>
-                      <small>Find a paragraph using this style</small>
-                    </button>
-                  ))}
-                </>
+                <StylesPane
+                  styles={styleList}
+                  current={selected?.properties.styleId}
+                  disabled={busy || !canFormat}
+                  onApply={(id) => para({ styleId: id })}
+                  onContext={(id, anchor) => {
+                    setContextStyle(id);
+                    openHome("styleContext", anchor);
+                  }}
+                />
               )}
               {pane === "outline" && (
                 <>

@@ -28,3 +28,23 @@ it("flips above the trigger near the bottom without stretching the menu", () => 
     ),
   ).toEqual({ left: 200, top: 348, maxHeight: 640, clipped: false });
 });
+it("expands the Styles gallery from the gallery's own origin", () => {
+  expect(
+    menuPosition(
+      { left: 714, right: 1280, top: 89, bottom: 149 },
+      { width: 530, height: 334 },
+      { width: 1536, height: 816 },
+      "overlap",
+    ),
+  ).toEqual({ left: 714, top: 89, maxHeight: 719, clipped: false });
+});
+it("keeps an expanded gallery visible on a narrow viewport", () => {
+  expect(
+    menuPosition(
+      { left: 300, right: 420, top: 90, bottom: 154 },
+      { width: 320, height: 500 },
+      { width: 360, height: 480 },
+      "overlap",
+    ),
+  ).toEqual({ left: 32, top: 90, maxHeight: 382, clipped: true });
+});

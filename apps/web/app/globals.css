@@ -1317,7 +1317,7 @@ button:hover:not(:disabled) {
     print-color-adjust: exact;
   }
 }
-/* Home uses compact Office-style groups and modal choices, independent of canvas text. */
+/* Compact ribbon groups; menu surfaces live in the native top layer. */
 .home-ribbon {
   height: 112px;
   min-height: 112px;
@@ -1529,8 +1529,8 @@ button:hover:not(:disabled) {
   gap: 1px;
   min-width: 0;
   flex: 1;
-  height: 63px;
-  margin: 4px 13px 0 0;
+  height: 100%;
+  margin: 0;
   border: 1px solid #ddd;
   background: white;
 }
@@ -1558,17 +1558,26 @@ button:hover:not(:disabled) {
   white-space: nowrap;
   color: #535353;
 }
+.home-style-picker {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 64px;
+  margin-top: 4px;
+}
 .home-style-more {
-  position: absolute;
-  right: 8px;
-  top: 4px;
-  bottom: 21px;
-  width: 14px;
+  flex: 0 0 18px;
+  height: 100%;
   display: grid;
   place-items: center;
   border: 1px solid #d0d0d0;
   border-left: 0;
   background: #fff;
+}
+.home-style-more:hover,
+.home-style-more[aria-expanded="true"] {
+  background: #e5edf5;
+  border-color: #b4c5d7;
 }
 .home-editing-stack {
   display: flex;
@@ -2020,7 +2029,7 @@ button:hover:not(:disabled) {
   overflow-y: auto;
 }
 .home-dropdown .home-styles-list {
-  grid-template-columns: repeat(3, minmax(0, 150px));
+  grid-template-columns: repeat(5, minmax(0, 104px));
   max-width: calc(100vw - 32px);
   gap: 2px;
   padding: 4px;
@@ -2030,9 +2039,9 @@ button:hover:not(:disabled) {
 .home-dropdown .home-styles-list button {
   border-radius: 0;
   border: 1px solid transparent;
-  min-height: 70px;
-  padding: 8px;
-  gap: 8px;
+  min-height: 56px;
+  padding: 6px;
+  gap: 0;
   overflow: hidden;
 }
 .home-styles-list .style-preview {
@@ -2043,8 +2052,9 @@ button:hover:not(:disabled) {
   color: inherit;
 }
 .home-style-gallery button {
-  min-width: 93px;
-  gap: 6px;
+  min-width: 104px;
+  height: 100%;
+  gap: 0;
 }
 .style-form-preview {
   border: 1px solid #ccc;
@@ -2074,11 +2084,303 @@ button:hover:not(:disabled) {
 
 .home-find-split {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  height: 24px;
+  border: 1px solid transparent;
+}
+.home-find-split:hover,
+.home-find-split:focus-within {
+  background: #e5edf5;
+  border-color: #b4c5d7;
+}
+.home-editing-stack .home-find-split > button {
+  height: 22px;
+  border: 0;
+  border-radius: 0;
 }
 .home-find-split > button:first-child {
   flex: 1;
 }
-.home-find-split > button:last-child {
-  padding: 3px;
+.home-editing-stack .home-find-split > button:last-child {
+  width: 18px;
+  justify-content: center;
+  padding: 0;
+}
+.home-find-split:hover > button:last-child {
+  border-left: 1px solid #b4c5d7;
+}
+/* Shared Office ribbon geometry and anchored menu content. */
+.group-caption .ribbon-dialog-launcher {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  right: -5px;
+  bottom: 0;
+  border: 1px solid transparent;
+  border-radius: 0;
+  color: #555;
+}
+.ribbon-dialog-launcher:hover {
+  background: #e5edf5;
+  border-color: #b4c5d7;
+}
+.office-ribbon {
+  height: 112px;
+  min-height: 112px;
+  padding: 7px 8px 3px;
+  background: #fafafa;
+  border-top: 1px solid #eee;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.office-ribbon .ribbon-group {
+  padding: 0 9px;
+  border-color: #dadada;
+}
+.office-ribbon .ribbon-group-tools {
+  align-items: stretch;
+  gap: 1px;
+}
+.office-ribbon .group-caption {
+  height: 18px;
+  padding-top: 4px;
+  font-size: 10px;
+  color: #656565;
+}
+.office-command {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: #262626;
+}
+.office-command svg {
+  flex-shrink: 0;
+}
+.office-command-large {
+  flex-direction: column;
+  justify-content: flex-start;
+  text-align: center;
+  height: 76px;
+  min-width: 46px;
+  max-width: 74px;
+  padding: 3px 5px;
+  gap: 4px;
+  white-space: normal;
+}
+.office-command-large > span {
+  max-width: 65px;
+}
+.office-command-large > svg:last-child:not(:first-child) {
+  margin-top: auto;
+}
+.office-command:hover:not(:disabled),
+.office-command[aria-expanded="true"] {
+  background: #e5edf5;
+  border-color: #b4c5d7;
+}
+.office-command:disabled {
+  opacity: 0.53;
+}
+.office-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.office-menu {
+  min-width: 180px;
+  padding: 3px 0;
+}
+.office-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 30px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.office-choice > span {
+  flex: 1;
+}
+.office-choice small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #656565;
+}
+.office-choice:hover:not(:disabled),
+.office-choice.is-active {
+  background: #e5edf5;
+  border-color: #b4c5d7;
+}
+.office-choice:disabled {
+  opacity: 0.5;
+}
+.office-menu hr {
+  border: 0;
+  border-top: 1px solid #dedede;
+  margin: 3px 0;
+}
+.office-menu-heading {
+  padding: 5px 12px;
+  margin: 0;
+  background: #eee;
+  font-weight: 600;
+  font-size: 11px;
+}
+.office-paragraph-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 1px 6px 0;
+  font-size: 11px;
+}
+.office-field-heading {
+  color: #656565;
+  height: 17px;
+}
+.office-paragraph-fields label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  height: 24px;
+}
+.office-paragraph-fields label > span:first-of-type {
+  min-width: 59px;
+}
+.office-number-field {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #b8b8b8;
+  padding-right: 3px;
+  color: #444;
+}
+.office-number-field:focus-within {
+  outline: 1px solid #487aac;
+}
+.office-number-field input {
+  width: 52px;
+  height: 21px;
+  border: 0;
+  border-radius: 0;
+  padding: 1px 3px;
+  font-size: 11px;
+  background: transparent;
+  outline: none;
+}
+.office-number-field > span {
+  font-size: 10px;
+}
+.table-picker {
+  padding: 4px 9px 9px;
+}
+.table-picker p {
+  margin: 3px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.table-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 17px);
+  gap: 3px;
+}
+.table-picker-grid button {
+  height: 17px;
+  border: 1px solid #aaa;
+  background: white;
+  border-radius: 0;
+  padding: 0;
+}
+.table-picker-grid button.selected {
+  border-color: #c58d4b;
+  background: #fce2bf;
+}
+.office-symbol-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 28px);
+  padding: 5px;
+}
+.office-symbol-grid button {
+  font:
+    21px Georgia,
+    serif;
+  padding: 4px;
+}
+.office-symbol-grid button:hover {
+  background: #e5edf5;
+}
+.task-pane-leading {
+  order: -1;
+  border-left: 0;
+  border-right: 1px solid #d3dbe6;
+}
+.clipboard-pane-actions {
+  display: flex;
+  gap: 8px;
+}
+.clipboard-pane-actions button {
+  padding: 5px 10px;
+  border: 1px solid #bbb;
+  font-size: 12px;
+}
+.clipboard-pane-items,
+.styles-pane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.clipboard-pane-items button,
+.styles-pane-list button {
+  text-align: left;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 0;
+}
+.clipboard-pane-items button span {
+  display: block;
+  white-space: pre-wrap;
+  max-height: 90px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.styles-pane-list .style-preview {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.styles-pane-list button:hover,
+.styles-pane-list button.is-active,
+.clipboard-pane-items button:hover {
+  background: #e5edf5;
+  border-color: #b4c5d7;
+}
+@media (max-width: 760px) {
+  .task-pane-leading {
+    left: 0;
+    right: auto;
+  }
+  .home-ribbon {
+    height: 112px;
+    min-height: 112px;
+  }
+  .home-dropdown .home-styles-list {
+    grid-template-columns: repeat(3, minmax(0, 104px));
+  }
 }
